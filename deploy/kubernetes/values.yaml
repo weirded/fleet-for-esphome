@@ -1,0 +1,75 @@
+image:
+  repository: ghcr.io/weirded/esphome-dist-client
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+server:
+  url: ""
+  token: ""
+  existingSecret: ""
+  existingSecretTokenKey: SERVER_TOKEN
+
+worker:
+  tags:
+    - k8s
+    - "os:linux"
+  tagsOverwrite: false
+  maxParallelJobs: 2
+  diskQuotaGb: 0
+  minFreeDiskPct: 10
+  pollInterval: 1
+  heartbeatInterval: 10
+  jobTimeout: 600
+  otaTimeout: 120
+  extraEnv: []
+
+replicas: 1
+
+autoscaling:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 3
+  cooldownPeriod: 600
+  pollingInterval: 30
+  targetQueueSize: 2
+  metricsApi:
+    insecureTLSSkipVerify: false
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+hostNetwork: false
+dnsPolicy: ""
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+terminationGracePeriodSeconds: 600
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nameOverride: ""
+fullnameOverride: ""

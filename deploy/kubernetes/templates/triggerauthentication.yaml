@@ -1,0 +1,13 @@
+{{- if .Values.autoscaling.enabled -}}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "esphome-fleet-worker.fullname" . }}
+  labels:
+    {{- include "esphome-fleet-worker.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: token
+      name: {{ include "esphome-fleet-worker.secretName" . }}
+      key: {{ include "esphome-fleet-worker.secretTokenKey" . }}
+{{- end -}}

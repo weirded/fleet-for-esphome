@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "esphome-fleet-worker.fullname" . }}
+  labels:
+    {{- include "esphome-fleet-worker.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "esphome-fleet-worker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "esphome-fleet-worker.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "esphome-fleet-worker.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- if .Values.dnsPolicy }}
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      {{- else if .Values.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: SERVER_URL
+              value: {{ required "server.url is required" .Values.server.url | quote }}
+            - name: SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "esphome-fleet-worker.secretName" . }}
+                  key: {{ include "esphome-fleet-worker.secretTokenKey" . }}
+            - name: MAX_PARALLEL_JOBS
+              value: {{ .Values.worker.maxParallelJobs | quote }}
+            - name: POLL_INTERVAL
+              value: {{ .Values.worker.pollInterval | quote }}
+            - name: HEARTBEAT_INTERVAL
+              value: {{ .Values.worker.heartbeatInterval | quote }}
+            - name: JOB_TIMEOUT
+              value: {{ .Values.worker.jobTimeout | quote }}
+            - name: OTA_TIMEOUT
+              value: {{ .Values.worker.otaTimeout | quote }}
+            - name: MIN_FREE_DISK_PCT
+              value: {{ .Values.worker.minFreeDiskPct | quote }}
+            {{- if .Values.worker.diskQuotaGb }}
+            - name: WORKER_DISK_QUOTA_GB
+              value: {{ .Values.worker.diskQuotaGb | quote }}
+            {{- end }}
+            {{- if .Values.worker.tags }}
+            - name: WORKER_TAGS
+              value: {{ join "," .Values.worker.tags | quote }}
+            {{- end }}
+            {{- if .Values.worker.tagsOverwrite }}
+            - name: WORKER_TAGS_OVERWRITE
+              value: "1"
+            {{- end }}
+            - name: PLATFORM
+              value: linux
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: versions
+              mountPath: /esphome-versions
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: versions
+          {{- if and .Values.persistence.enabled (not .Values.autoscaling.enabled) }}
+          persistentVolumeClaim:
+            claimName: {{ include "esphome-fleet-worker.fullname" . }}-versions
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

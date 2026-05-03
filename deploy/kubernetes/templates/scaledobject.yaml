@@ -1,0 +1,27 @@
+{{- if .Values.autoscaling.enabled -}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "esphome-fleet-worker.fullname" . }}
+  labels:
+    {{- include "esphome-fleet-worker.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "esphome-fleet-worker.fullname" . }}
+  minReplicaCount: {{ .Values.autoscaling.minReplicaCount }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicaCount }}
+  cooldownPeriod: {{ .Values.autoscaling.cooldownPeriod }}
+  pollingInterval: {{ .Values.autoscaling.pollingInterval }}
+  triggers:
+    - type: metrics-api
+      metadata:
+        targetValue: {{ .Values.autoscaling.targetQueueSize | quote }}
+        url: "{{ .Values.server.url }}/api/v1/status"
+        valueLocation: "queue_size"
+        authMode: "bearer"
+        {{- if .Values.autoscaling.metricsApi.insecureTLSSkipVerify }}
+        unsafeSsl: "true"
+        {{- end }}
+      authenticationRef:
+        name: {{ include "esphome-fleet-worker.fullname" . }}
+{{- end -}}
