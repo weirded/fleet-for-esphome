@@ -24,7 +24,7 @@
       "properties": {
         "url": {
           "type": "string",
-          "description": "Base URL of the distributed-esphome server, e.g. http://homeassistant.local:8765. Required at install time (enforced by deployment.yaml's `required` helper) but allowed empty in defaults so `helm lint` passes against values.yaml."
+          "description": "Base URL of the distributed-esphome server, e.g. http://homeassistant.local:8765. Required at install time — enforced by deployment.yaml's `required` helper, which raises a fatal error during `helm install` / `helm template` when empty. Allowed empty in this schema so `helm lint` (without `--strict`) emits a non-fatal WARN rather than rejecting the chart against unfilled defaults; CI uses `helm lint --strict -f ci/values-minimal.yaml` to catch the misconfiguration."
         },
         "token": { "type": "string" },
         "existingSecret": { "type": "string" },
