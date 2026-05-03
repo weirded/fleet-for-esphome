@@ -7,17 +7,16 @@ Expand the name of the chart.
 
 {{/*
 Fully qualified app name. Truncated at 63 chars (Kubernetes DNS-1123 limit).
+Defaults to Release.Name; the chart name is long (esphome-fleet-worker) so the
+standard "<release>-<chart>" pattern produces ugly resource names. Users
+running multiple releases in one namespace can disambiguate via
+`fullnameOverride`.
 */}}
 {{- define "esphome-fleet-worker.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- $name := default .Chart.Name .Values.nameOverride -}}
-{{- if contains $name .Release.Name -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 

@@ -1,0 +1,92 @@
+suite: scaledobject + triggerauthentication
+templates:
+  - templates/scaledobject.yaml
+  - templates/triggerauthentication.yaml
+release:
+  name: fleet-worker
+  namespace: esphome-fleet
+tests:
+  - it: renders no KEDA resources when autoscaling disabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders ScaledObject when autoscaling enabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.enabled: true
+      autoscaling.minReplicaCount: 1
+      autoscaling.maxReplicaCount: 4
+      autoscaling.targetQueueSize: 3
+      autoscaling.cooldownPeriod: 900
+    template: templates/scaledobject.yaml
+    asserts:
+      - equal:
+          path: kind
+          value: ScaledObject
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: fleet-worker
+      - equal:
+          path: spec.minReplicaCount
+          value: 1
+      - equal:
+          path: spec.maxReplicaCount
+          value: 4
+      - equal:
+          path: spec.cooldownPeriod
+          value: 900
+      - equal:
+          path: spec.triggers[0].type
+          value: metrics-api
+      - equal:
+          path: spec.triggers[0].metadata.url
+          value: "http://example:8765/api/v1/status"
+      - equal:
+          path: spec.triggers[0].metadata.valueLocation
+          value: queue_size
+      - equal:
+          path: spec.triggers[0].metadata.targetValue
+          value: "3"
+      - equal:
+          path: spec.triggers[0].metadata.authMode
+          value: bearer
+
+  - it: renders TriggerAuthentication referencing the right Secret/key
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.enabled: true
+    template: templates/triggerauthentication.yaml
+    asserts:
+      - equal:
+          path: kind
+          value: TriggerAuthentication
+      - equal:
+          path: spec.secretTargetRef[0].parameter
+          value: token
+      - equal:
+          path: spec.secretTargetRef[0].name
+          value: fleet-worker
+      - equal:
+          path: spec.secretTargetRef[0].key
+          value: SERVER_TOKEN
+
+  - it: TriggerAuthentication points at existingSecret when set
+    set:
+      server.url: http://example:8765
+      server.existingSecret: outside-secret
+      server.existingSecretTokenKey: TKN
+      autoscaling.enabled: true
+    template: templates/triggerauthentication.yaml
+    asserts:
+      - equal:
+          path: spec.secretTargetRef[0].name
+          value: outside-secret
+      - equal:
+          path: spec.secretTargetRef[0].key
+          value: TKN

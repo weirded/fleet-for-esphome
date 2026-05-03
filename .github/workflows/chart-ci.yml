@@ -1,0 +1,67 @@
+name: Helm chart CI
+
+# Validates deploy/kubernetes/ on every PR + push to develop/main:
+#   1. helm lint        — schema + YAML correctness
+#   2. helm-unittest    — template-rendering unit tests under tests/
+#   3. helm template    — render against ci/values-*.yaml fixtures
+#
+# Cheap (~30s); runs only when the chart or its CI changes so we don't
+# slow down server PRs. Pairs with publish-* workflows; this one does
+# NOT publish, only validates.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/kubernetes/**"
+      - ".github/workflows/chart-ci.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "deploy/kubernetes/**"
+      - ".github/workflows/chart-ci.yml"
+
+concurrency:
+  group: chart-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.16.4
+
+      - name: helm lint (defaults)
+        run: helm lint deploy/kubernetes/
+
+      - name: helm lint (against minimal fixture)
+        run: helm lint deploy/kubernetes/ -f deploy/kubernetes/ci/values-minimal.yaml
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest --version v0.7.4
+
+      - name: helm unittest
+        run: helm unittest deploy/kubernetes/
+
+      - name: helm template — minimal
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-minimal.yaml > /tmp/render-minimal.yaml
+
+      - name: helm template — autoscale
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-autoscale.yaml > /tmp/render-autoscale.yaml
+
+      - name: helm template — existing secret
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-existing-secret.yaml > /tmp/render-existing-secret.yaml
+
+      - name: helm template — host network
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-host-network.yaml > /tmp/render-host-network.yaml
+
+      - name: Validate rendered manifests with kubeconform
+        uses: docker://ghcr.io/yannh/kubeconform:v0.6.7@sha256:23b5ed42213f2ed0d6cca74b0afa86dcd5b5e11d61fbe6c4caaa31efe7b5eb02
+        with:
+          args: -summary -strict -ignore-missing-schemas -kubernetes-version 1.30.0 /tmp/render-minimal.yaml /tmp/render-autoscale.yaml /tmp/render-existing-secret.yaml /tmp/render-host-network.yaml
+        continue-on-error: true
