@@ -16,7 +16,7 @@ spec:
     - type: metrics-api
       metadata:
         targetValue: {{ .Values.autoscaling.targetQueueSize | quote }}
-        url: "{{ .Values.server.url }}/api/v1/status"
+        url: "{{ trimSuffix "/" .Values.server.url }}/api/v1/status"
         valueLocation: "queue_size"
         authMode: "bearer"
         {{- if .Values.autoscaling.metricsApi.insecureTLSSkipVerify }}

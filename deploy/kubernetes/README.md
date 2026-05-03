@@ -99,11 +99,15 @@ See `values.yaml` for the full list. The most-touched fields:
 helm uninstall fleet-worker -n esphome-fleet
 ```
 
-The PVC is **not** deleted automatically (Helm doesn't delete PVCs created from a `volumeClaimTemplate`-style flow). Delete manually if you want the disk freed:
+This deletes everything the chart created, **including the build-cache PVC** (a plain `PersistentVolumeClaim`, which Helm reaps on uninstall by default). To keep the cache across uninstalls — so the next install starts with a warm ESPHome version cache — add the resource-policy annotation in your values:
 
-```bash
-kubectl -n esphome-fleet delete pvc -l app.kubernetes.io/instance=fleet-worker
+```yaml
+persistence:
+  annotations:
+    helm.sh/resource-policy: keep
 ```
+
+With that set, `helm uninstall` leaves the PVC behind and you'd `kubectl delete pvc ...` manually when you actually want the disk freed.
 
 ## Compatibility
 

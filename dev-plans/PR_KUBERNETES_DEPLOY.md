@@ -14,7 +14,7 @@ The chart deploys workers only — the server still runs as the HA add-on (or a 
 - **Server token** lives in a `Secret` the chart creates from `serverToken` in values, OR references an existing Secret via `existingSecret`. README discourages putting the token in the values file directly; recommends sealed-secrets / SOPS / external-secrets.
 - **PVC for ESPHome version cache.** `/esphome-versions/` per pod, default 10Gi RWO. Configurable; can be set to `emptyDir` for stateless workers (re-downloads the venv on cold start, ~30s for ESPHome's pip install).
 - **`terminationGracePeriodSeconds: 600`** so a pod mid-compile has time to finish before SIGKILL on scale-down.
-- **`topologySpreadConstraints`** spread replicas across nodes by default for parallelism — overridable.
+- **`topologySpreadConstraints`** is exposed in values as an empty list; users supply their own. The chart does NOT inject a default spread constraint — clusters with one node would always violate `maxSkew: 1`. (Earlier drafts suggested a built-in default; that's not implemented and the design favors letting users opt in based on their topology.)
 - **Bring-your-own networking.** Chart does NOT set `hostNetwork: true` by default; assumes pod networking can route to the ESP devices' IPs. Users with pods on a different L3 segment from devices can either set `hostNetwork: true` via values or use a CNI feature like `Multus` to attach a second interface. README has a troubleshooting section.
 
 ## Chart layout
@@ -49,19 +49,22 @@ image:
   pullPolicy: IfNotPresent
 
 server:
-  url: ""                # required, e.g. http://homeassistant.local:8765
-  token: ""              # set this OR existingSecret
-  existingSecret: ""     # name of a Secret containing key SERVER_TOKEN
-  insecureTLSSkipVerify: false  # only honored when url is https
+  url: ""                          # required, e.g. http://homeassistant.local:8765
+  token: ""                        # set this OR existingSecret
+  existingSecret: ""               # name of a Secret containing the token
+  existingSecretTokenKey: SERVER_TOKEN
 
 worker:
   tags: ["k8s", "os:linux"]
+  tagsOverwrite: false
   maxParallelJobs: 2
-  diskQuotaGb: 0         # 0 = unlimited
+  diskQuotaGb: 0
   minFreeDiskPct: 10
+  pollInterval: 1
+  heartbeatInterval: 10
+  jobTimeout: 600
+  otaTimeout: 120
   extraEnv: []
-  podLabels: {}
-  podAnnotations: {}
 
 replicas: 1              # used when autoscaling.enabled is false
 
@@ -71,13 +74,16 @@ autoscaling:
   maxReplicaCount: 3
   cooldownPeriod: 600
   pollingInterval: 30
-  targetQueueSize: 2     # desired = ceil(queue_size / targetQueueSize), capped at maxReplicaCount
+  targetQueueSize: 2
+  metricsApi:
+    insecureTLSSkipVerify: false   # only meaningful when server.url is https
 
 persistence:
   enabled: true
-  storageClass: ""       # uses default
+  storageClass: ""
   size: 10Gi
   accessModes: [ReadWriteOnce]
+  annotations: {}                   # use helm.sh/resource-policy: keep to preserve on uninstall
 
 resources:
   requests:
@@ -89,9 +95,16 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
-topologySpreadConstraints: []  # default applied via _helpers if empty
+topologySpreadConstraints: []
 hostNetwork: false
+dnsPolicy: ""
 priorityClassName: ""
+
+podLabels: {}                       # at root, NOT under worker:
+podAnnotations: {}                  # at root, NOT under worker:
+podSecurityContext: {}
+securityContext: {}
+
 serviceAccount:
   create: true
   name: ""

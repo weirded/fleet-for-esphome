@@ -90,3 +90,14 @@ tests:
       - equal:
           path: spec.secretTargetRef[0].key
           value: TKN
+
+  - it: trims trailing slash on server.url to avoid double-slash in metrics URL
+    set:
+      server.url: http://example:8765/
+      server.token: tok
+      autoscaling.enabled: true
+    template: templates/scaledobject.yaml
+    asserts:
+      - equal:
+          path: spec.triggers[0].metadata.url
+          value: "http://example:8765/api/v1/status"

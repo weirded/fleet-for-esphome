@@ -1,3 +1,15 @@
+{{- /*
+  Preflight validation. These fail at template render time so a misconfigured
+  install fails fast instead of producing pods that can never start.
+*/ -}}
+{{- if and (not .Values.server.token) (not .Values.server.existingSecret) -}}
+{{- fail "esphome-fleet-worker: either server.token or server.existingSecret must be set (the worker image requires SERVER_TOKEN at startup)" -}}
+{{- end -}}
+{{- if and .Values.persistence.enabled (not .Values.autoscaling.enabled) (gt (.Values.replicas | int) 1) -}}
+{{- if not (has "ReadWriteMany" .Values.persistence.accessModes) -}}
+{{- fail "esphome-fleet-worker: with persistence.enabled and replicas > 1, persistence.accessModes must include ReadWriteMany — a single RWO PVC cannot multi-attach across pods. Either set persistence.enabled=false (use emptyDir), reduce replicas to 1, or provide RWX storage." -}}
+{{- end -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,7 +66,7 @@ spec:
           {{- end }}
           env:
             - name: SERVER_URL
-              value: {{ required "server.url is required" .Values.server.url | quote }}
+              value: {{ trimSuffix "/" (required "server.url is required" .Values.server.url) | quote }}
             - name: SERVER_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -12,6 +12,7 @@ tests:
       server.url: http://example:8765
       server.token: tok
       replicas: 2
+      persistence.enabled: false
     asserts:
       - equal:
           path: spec.replicas
@@ -112,3 +113,55 @@ tests:
           path: spec.template.spec.volumes[?(@.name=='versions')].emptyDir
       - notExists:
           path: spec.template.spec.volumes[?(@.name=='versions')].persistentVolumeClaim
+
+  - it: trims trailing slash on server.url for SERVER_URL env
+    set:
+      server.url: http://example:8765/
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_URL')].value
+          value: http://example:8765
+
+  - it: fails when neither server.token nor server.existingSecret is set
+    set:
+      server.url: http://example:8765
+    asserts:
+      - failedTemplate:
+          errorMessage: "esphome-fleet-worker: either server.token or server.existingSecret must be set (the worker image requires SERVER_TOKEN at startup)"
+
+  - it: fails when fixed-mode persistence + replicas > 1 + RWO only
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      replicas: 2
+      persistence.enabled: true
+      persistence.accessModes:
+        - ReadWriteOnce
+    asserts:
+      - failedTemplate:
+          errorMessage: "esphome-fleet-worker: with persistence.enabled and replicas > 1, persistence.accessModes must include ReadWriteMany — a single RWO PVC cannot multi-attach across pods. Either set persistence.enabled=false (use emptyDir), reduce replicas to 1, or provide RWX storage."
+
+  - it: passes when fixed-mode persistence + replicas > 1 + RWX
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      replicas: 2
+      persistence.enabled: true
+      persistence.accessModes:
+        - ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: passes when replicas > 1 + persistence disabled (emptyDir)
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      replicas: 3
+      persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
