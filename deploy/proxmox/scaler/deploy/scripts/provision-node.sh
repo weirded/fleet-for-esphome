@@ -40,7 +40,6 @@ set -euo pipefail
 : "${POOL_VMIDS:?POOL_VMIDS is required}"
 
 POOL_HOSTNAME_FMT="${POOL_HOSTNAME_FMT:-esphome-worker-%d}"
-POOL_STORAGE="${POOL_STORAGE:-local-lvm}"
 POOL_BRIDGE="${POOL_BRIDGE:-vmbr0}"
 POOL_DISK_GB="${POOL_DISK_GB:-8}"
 POOL_MEM_MB="${POOL_MEM_MB:-2048}"
@@ -53,6 +52,22 @@ WORKER_TAGS_EXTRA="${WORKER_TAGS_EXTRA:-proxmox,lxc}"
 if ! command -v pct >/dev/null 2>&1; then
   echo "error: pct CLI not found. Run this on a Proxmox VE host." >&2
   exit 1
+fi
+
+# --- pick a rootdir-capable storage ---
+# `local-lvm` is the most common default after a fresh Proxmox install but is
+# absent on Ceph-only or ZFS-only clusters (we hit this in homelab testing —
+# this cluster only had `Pool0` (rbd) and `local` (dir, no rootdir support)).
+# Auto-detect the first active rootdir-capable storage if the operator didn't
+# pin one explicitly.
+if [ -z "${POOL_STORAGE:-}" ]; then
+  POOL_STORAGE=$(pvesm status --content rootdir 2>/dev/null | awk 'NR>1 && $3=="active"{print $1; exit}')
+  if [ -z "$POOL_STORAGE" ]; then
+    echo "error: no active rootdir-capable storage found on this node. Set POOL_STORAGE=<name>." >&2
+    pvesm status --content rootdir >&2 || true
+    exit 1
+  fi
+  echo "[provision] auto-detected POOL_STORAGE=$POOL_STORAGE (override with POOL_STORAGE=...)"
 fi
 
 # --- ensure Debian 12 standard template is downloaded ---

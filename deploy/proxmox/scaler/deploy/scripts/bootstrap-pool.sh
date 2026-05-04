@@ -32,8 +32,18 @@ set -euo pipefail
 : "${TEMPLATE_VMID:?TEMPLATE_VMID is required}"
 : "${POOL_VMIDS:?POOL_VMIDS is required}"
 : "${POOL_HOSTNAME_FMT:?POOL_HOSTNAME_FMT is required}"
-: "${POOL_STORAGE:?POOL_STORAGE is required}"
 : "${POOL_BRIDGE:?POOL_BRIDGE is required}"
+
+# Auto-detect a rootdir-capable storage if not pinned. `local-lvm` is the
+# fresh-install default but Ceph/ZFS-only clusters don't have it.
+if [ -z "${POOL_STORAGE:-}" ]; then
+  POOL_STORAGE=$(pvesm status --content rootdir 2>/dev/null | awk 'NR>1 && $3=="active"{print $1; exit}')
+  if [ -z "$POOL_STORAGE" ]; then
+    echo "error: no active rootdir-capable storage found. Set POOL_STORAGE=<name>." >&2
+    exit 1
+  fi
+  echo "[bootstrap] auto-detected POOL_STORAGE=$POOL_STORAGE"
+fi
 
 POOL_DESCRIPTION="${POOL_DESCRIPTION:-esphome-fleet worker (managed by scaler)}"
 POOL_FULL_CLONE="${POOL_FULL_CLONE:-1}"

@@ -14,18 +14,21 @@ Both are run on the Proxmox host (root) and are idempotent — re-running with t
 Run once per node, with that node's chunk of VMIDs:
 
 ```bash
-# On pve1
+# On pve1 (the typical case — script auto-picks an active rootdir-capable storage)
 FLEET_URL=http://homeassistant.local:8765 \
 FLEET_TOKEN=<paste from Fleet Settings drawer> \
 POOL_VMIDS="200 201" \
 ./provision-node.sh
 
-# On pve-beast (4-worker node)
+# On pve-beast (4-worker node, also pin storage explicitly for reproducibility)
 FLEET_URL=http://homeassistant.local:8765 \
 FLEET_TOKEN=<paste from Fleet Settings drawer> \
 POOL_VMIDS="300 301 302 303" \
+POOL_STORAGE=local-zfs \
 ./provision-node.sh
 ```
+
+If `POOL_STORAGE` isn't set, the script picks the first active storage that supports `rootdir` (via `pvesm status --content rootdir`). On a fresh Proxmox install that's usually `local-lvm`; on Ceph-only clusters it might be `Pool0` or similar. The script logs the choice so you can see what it picked.
 
 What it does:
 
