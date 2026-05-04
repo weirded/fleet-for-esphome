@@ -1,4 +1,4 @@
-aiohttp>=3.9
+aiohttp>=3.13.5
 pydantic>=2.13.3
 croniter>=6.2.2
 apscheduler>=3.11.2,<4
