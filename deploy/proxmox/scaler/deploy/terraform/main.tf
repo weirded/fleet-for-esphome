@@ -4,30 +4,38 @@ provider "proxmox" {
   insecure  = var.proxmox_insecure
 }
 
+# Flatten { node1 = {count=2, first_vmid=200}, node2 = {count=1, first_vmid=300} }
+# into a list of one element per LXC: [{node="node1", index=0, vmid=200}, {node="node1", index=1, vmid=201}, ...].
 locals {
-  vmids = [for i in range(var.pool_size) : var.first_vmid + i]
+  pool_entries = flatten([
+    for node, target in var.node_targets : [
+      for i in range(target.count) : {
+        node       = node
+        index      = i
+        vmid       = target.first_vmid + i
+      }
+    ]
+  ])
+
+  # Map keyed by vmid for the for_each below.
+  pool_by_vmid = { for entry in local.pool_entries : tostring(entry.vmid) => entry }
 }
 
-# One Container resource per VMID. The scaler manages start/stop after creation.
-# We provision them in stopped state (`started = false`) so creation doesn't
-# fight with the scaler's reconciliation loop on first apply.
 resource "proxmox_virtual_environment_container" "worker" {
-  for_each = { for i, vmid in local.vmids : tostring(vmid) => { index = i, vmid = vmid } }
+  for_each = local.pool_by_vmid
 
-  node_name = var.proxmox_node
+  node_name = each.value.node
   vm_id     = each.value.vmid
-  tags      = var.tags
+  tags      = concat([var.worker_tag], var.extra_tags)
   started   = false
 
-  # Clone from the template instead of declaring a fresh OS template — keeps
-  # the worker image + autostart config the operator baked into the template.
   clone {
     vm_id = var.template_vmid
     full  = var.full_clone
   }
 
   initialization {
-    hostname = "${var.hostname_prefix}-${each.value.index + 1}"
+    hostname = "${var.hostname_prefix}-${each.value.node}-${each.value.index + 1}"
 
     ip_config {
       ipv4 {
@@ -54,9 +62,6 @@ resource "proxmox_virtual_environment_container" "worker" {
     bridge = var.bridge
   }
 
-  # Most worker images need /tmp + the docker daemon to start cleanly. If your
-  # template has Docker baked in, bump this so first-boot install scripts
-  # complete before the scaler tries to start the LXC for real.
   startup {
     order = 1
   }

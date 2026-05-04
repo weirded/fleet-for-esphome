@@ -1,12 +1,14 @@
-# Terraform module — Proxmox LXC worker pool
+# Terraform module — multi-node Proxmox LXC worker pool
 
-Provisions the LXC worker pool the scaler manages. Idempotent: `terraform apply` after a `pool_size` bump just adds the new clones; reducing `pool_size` removes the highest-numbered ones.
+Provisions LXC workers across **multiple Proxmox nodes**, with a per-node count. Default is `count = 1` per node ("each node runs one ESPHome build worker"). Override per-node for beefier hosts (`count = 4`) or to skip lightweight ones (`count = 0`).
+
+`terraform apply` is idempotent: bumping `count` for a node adds clones; lowering removes the highest-numbered ones; adding a node creates its pool.
 
 ## Prerequisites
 
-1. **A pre-built LXC template** on the Proxmox node. The scaler doesn't customize the OS — whatever you put in the template (Docker + the worker container, or a Python venv with the worker pip-installed, autostarted on boot) is what each clone inherits.
-   - Quickest path: create one container manually, install + configure the worker, `pct stop <id>; pct template <id>`. Note the resulting VMID — it goes in `template_vmid`.
-2. **A Proxmox API token** with permissions to create + manage containers in the target pool. In the Proxmox UI: Datacenter → Permissions → API Tokens → Add. Give it `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, and `Datastore.AllocateSpace` on the relevant containers/storage. Save the resulting `<user>@<realm>!<token>=<secret>` string into `proxmox_api_token`.
+1. **A pre-built LXC template** referenced by `template_vmid`. The scaler doesn't customize the OS — whatever the template has (Debian/Ubuntu + Docker + the worker container autostarted with `SERVER_URL` / `SERVER_TOKEN` env baked in) is what every clone inherits.
+   - Don't have a template? Use `deploy/proxmox/scaler/deploy/scripts/provision-node.sh` instead — it creates LXCs from scratch (no template needed) and is the "no-Terraform" path.
+2. **A Proxmox API token** with `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `Datastore.AllocateSpace` on the relevant containers/storage. Format: `<user>@<realm>!<tokenname>=<secret>`. Goes in `proxmox_api_token`.
 
 ## Use
 
@@ -24,20 +26,55 @@ After apply:
 terraform output scaler_env_snippet
 ```
 
-Paste that into your scaler's `config.env`. Add the `PROXMOX_SCALER_FLEET_*` and `PROXMOX_SCALER_PROXMOX_TOKEN_*` lines yourself — they aren't in Terraform state by design (token rotation shouldn't drift Terraform).
+Paste that into your scaler's `config.env`. Add the `PROXMOX_SCALER_FLEET_*` and `PROXMOX_SCALER_PROXMOX_TOKEN_*` lines yourself — they aren't in Terraform state by design.
 
-## Resizing the pool
+## node_targets — examples
 
-- **Grow**: bump `pool_size`, run `terraform apply`. New VMIDs (`first_vmid + pool_size_old` through `first_vmid + pool_size_new - 1`) are created. Update the scaler's `PROXMOX_SCALER_VMIDS` to include the new VMIDs.
-- **Shrink**: lower `pool_size`, run `terraform apply`. Terraform destroys the highest-numbered VMIDs. Make sure they're stopped first (or set the scaler's `MIN_WORKERS` low enough that they'd already be stopped).
+**Homogeneous cluster, 1 worker per node (the default):**
+
+```hcl
+node_targets = {
+  pve1 = { count = 1, first_vmid = 200 }
+  pve2 = { count = 1, first_vmid = 210 }
+  pve3 = { count = 1, first_vmid = 220 }
+}
+```
+
+**Mixed cluster, beefy node gets more workers:**
+
+```hcl
+node_targets = {
+  pve-tiny  = { count = 1, first_vmid = 200 }
+  pve-beast = { count = 4, first_vmid = 300 }   # 4 parallel workers on the powerful node
+}
+```
+
+**Quarantine a node** (e.g. taken offline for maintenance) without removing its definition:
+
+```hcl
+node_targets = {
+  pve1     = { count = 1, first_vmid = 200 }
+  pve-old  = { count = 0, first_vmid = 300 }   # stays in state, no LXCs provisioned
+}
+```
+
+## Resizing
+
+- **Grow a node**: bump `node_targets["X"].count`, run `terraform apply`. New VMIDs (`first_vmid + count_old` through `first_vmid + count_new - 1`) get cloned.
+- **Shrink a node**: lower `count`, run `terraform apply`. Highest-numbered VMIDs are destroyed — make sure they're stopped first (the scaler should already have stopped them if `min_total_workers` permits).
+- **Add a node**: add a new entry. Don't reuse `first_vmid` ranges across nodes (Proxmox VMIDs are cluster-unique).
+
+## Why a separate `first_vmid` per node?
+
+VMIDs are **cluster-unique** in Proxmox VE. The module needs distinct ranges per node so it can grow each node's pool without colliding with another node's pool. Picking ranges by hand makes operator intent visible (`pve-beast: 300-303`) instead of having Terraform allocate VMIDs opaquely.
 
 ## What this module does NOT do
 
-- **Provision the template.** That's a one-time operator task; baking a template via Terraform is doable but bloats the module and makes worker-image updates require Terraform runs.
+- **Provision the template.** That's a one-time operator task; baking it via Terraform bloats the module and means worker-image updates need Terraform runs.
 - **Run the scaler.** Use the Dockerfile or systemd unit at `deploy/proxmox/scaler/`.
-- **Create API tokens or RBAC.** The provider needs a token to authenticate; the module can't bootstrap its own auth. Create the token in the Proxmox UI once.
-- **Manage the per-LXC worker config (SERVER_URL, SERVER_TOKEN, etc.).** That lives in the template — bake it in once. Rotating the Fleet token means updating the template, not Terraform.
+- **Create API tokens or RBAC.** Provider needs a token to authenticate; can't bootstrap its own auth.
+- **Manage per-LXC worker config.** That lives in the template; rotating the Fleet token means re-baking the template (or running `provision-node.sh` again with a new token).
 
 ## Provider notes
 
-This module uses `bpg/proxmox` (`~> 0.66`). The older `telmate/proxmox` provider works too in principle but its container support is less complete; we picked `bpg` because it's actively maintained and has first-class LXC clone support.
+`bpg/proxmox` `~> 0.66`. Actively maintained, first-class LXC clone support.

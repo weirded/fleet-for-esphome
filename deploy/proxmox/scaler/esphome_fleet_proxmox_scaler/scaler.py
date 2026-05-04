@@ -1,4 +1,4 @@
-"""The reconciliation loop. Pure logic — Fleet/Proxmox clients are injected so it's testable."""
+"""Reconciliation loop for the multi-node LXC pool."""
 
 from __future__ import annotations
 
@@ -21,11 +21,17 @@ class _FleetStatusLike(Protocol):
     online_workers: int
 
 
+class _LxcState(Protocol):
+    node: str
+    vmid: int
+    status: str
+
+
 class _ProxmoxController(Protocol):
-    def running_vmids(self, vmids: tuple[int, ...]) -> list[int]: ...  # noqa: E704
-    def stopped_vmids(self, vmids: tuple[int, ...]) -> list[int]: ...  # noqa: E704
-    def start(self, vmid: int) -> None: ...  # noqa: E704
-    def stop(self, vmid: int) -> None: ...  # noqa: E704
+    def list_online_nodes(self) -> list[str]: ...  # noqa: E704
+    def list_workers_by_node(self, tag: str) -> dict[str, list[_LxcState]]: ...  # noqa: E704
+    def start(self, node: str, vmid: int) -> None: ...  # noqa: E704
+    def stop(self, node: str, vmid: int) -> None: ...  # noqa: E704
 
 
 class Scaler:
@@ -40,53 +46,76 @@ class Scaler:
         self.fleet = fleet
         self.proxmox = proxmox
         self._clock = clock
-        # Set to negative so cooldown does not block the first scale-down decision.
         self._last_scale_down_at = -float("inf")
 
-    # --- public ---
+    # --- desired count ---
 
-    def desired_count(self, queue_size: int) -> int:
-        """Compute how many workers we want running for this queue size.
-
-        Always at least min_workers; never more than max_workers; otherwise
-        ceil(queue_size / target_per_worker). Returning min_workers when
-        queue is 0 is what keeps an "always-on" baseline available.
-        """
+    def desired_count(self, queue_size: int, max_total: int) -> int:
         if queue_size <= 0:
-            return self.config.min_workers
+            return self.config.min_total_workers
         raw = math.ceil(queue_size / self.config.target_per_worker)
-        return max(self.config.min_workers, min(self.config.max_workers, raw))
+        return max(self.config.min_total_workers, min(max_total, raw))
+
+    # --- single tick ---
 
     def tick(self) -> dict:
-        """One reconcile pass. Returns a small status dict for callers/tests."""
         try:
             status = self.fleet.status()
         except Exception:
             logger.exception("fleet status fetch failed; skipping this tick")
             return {"action": "skip", "reason": "fleet_unreachable"}
 
-        running = self.proxmox.running_vmids(self.config.vmids)
-        stopped = self.proxmox.stopped_vmids(self.config.vmids)
-        desired = self.desired_count(status.queue_size)
-        current = len(running)
+        try:
+            nodes = self.proxmox.list_online_nodes()
+            pool = self.proxmox.list_workers_by_node(self.config.worker_tag)
+        except Exception:
+            logger.exception("proxmox state fetch failed; skipping this tick")
+            return {"action": "skip", "reason": "proxmox_unreachable"}
+
+        per_node_max = {n: self.config.per_node_max(n) for n in nodes}
+        sum_caps = sum(per_node_max.values())
+        if self.config.max_total_workers is not None:
+            max_total = min(self.config.max_total_workers, sum_caps)
+        else:
+            max_total = sum_caps
+
+        running_per_node: dict[str, list] = {}
+        stopped_per_node: dict[str, list] = {}
+        for node in nodes:
+            lxcs = pool.get(node, [])
+            running_per_node[node] = [l for l in lxcs if l.status == "running"]
+            stopped_per_node[node] = [l for l in lxcs if l.status == "stopped"]
+
+        current_total = sum(len(rs) for rs in running_per_node.values())
+        desired_total = self.desired_count(status.queue_size, max_total)
 
         logger.debug(
-            "tick: queue_size=%d online_workers=%d running=%d desired=%d",
-            status.queue_size, status.online_workers, current, desired,
+            "tick: queue=%d online_workers=%d running=%d desired=%d max_total=%d",
+            status.queue_size, status.online_workers, current_total, desired_total, max_total,
         )
 
-        if desired > current:
-            return self._scale_up(stopped, desired - current)
-        if desired < current:
-            return self._scale_down(running, current - desired)
-        return {"action": "noop", "running": current, "desired": desired}
+        if desired_total > current_total:
+            return self._scale_up(
+                stopped_per_node, running_per_node, per_node_max, desired_total - current_total
+            )
+        if desired_total < current_total:
+            return self._scale_down(running_per_node, current_total - desired_total)
+        return {
+            "action": "noop",
+            "running": current_total,
+            "desired": desired_total,
+            "per_node_running": {n: len(r) for n, r in running_per_node.items()},
+        }
 
     def loop(self) -> None:
         logger.info(
-            "scaler started: pool=%s min=%d max=%d target_per_worker=%d poll=%ds cooldown=%ds",
-            self.config.vmids,
-            self.config.min_workers,
-            self.config.max_workers,
+            "scaler started: workers_per_node=%d overrides=%s min_total=%d max_total=%s "
+            "tag=%s target_per_worker=%d poll=%ds cooldown=%ds",
+            self.config.workers_per_node,
+            self.config.per_node_overrides,
+            self.config.min_total_workers,
+            self.config.max_total_workers if self.config.max_total_workers is not None else "auto",
+            self.config.worker_tag,
             self.config.target_per_worker,
             self.config.poll_interval,
             self.config.cooldown_seconds,
@@ -95,41 +124,79 @@ class Scaler:
             self.tick()
             time.sleep(self.config.poll_interval)
 
-    # --- private ---
+    # --- scale up ---
 
-    def _scale_up(self, stopped: list[int], count: int) -> dict:
-        # Lower-numbered VMIDs come up first — deterministic + matches the
-        # operator's mental model of "the first slot in the pool is the one
-        # that wakes first."
-        candidates = sorted(stopped)[:count]
-        if not candidates:
-            logger.warning(
-                "want to scale UP by %d but pool has no stopped vmids — operator should grow the pool",
-                count,
-            )
-            return {"action": "scale_up_blocked", "wanted": count, "available": 0}
-        for vmid in candidates:
+    def _scale_up(
+        self,
+        stopped_per_node: dict[str, list],
+        running_per_node: dict[str, list],
+        per_node_max: dict[str, int],
+        count: int,
+    ) -> dict:
+        """Pick stopped LXCs to start. Spread evenly: prefer nodes with the most
+        free capacity (cap - current_running). Within a node, prefer lowest VMID first.
+        """
+        started: list[tuple[str, int]] = []
+        for _ in range(count):
+            # Recompute per-node free capacity each iteration so successive picks see the update.
+            free_capacity = {
+                n: per_node_max[n] - len(running_per_node.get(n, []))
+                for n in per_node_max
+            }
+            # Filter to nodes with free capacity AND a stopped LXC available.
+            eligible = [
+                n for n, cap in free_capacity.items()
+                if cap > 0 and stopped_per_node.get(n)
+            ]
+            if not eligible:
+                break
+            # Pick the node with the most free capacity (tie: alphabetical).
+            best = max(eligible, key=lambda n: (free_capacity[n], -ord(n[0]) if n else 0))
+            # Lowest VMID first on that node.
+            lxc = sorted(stopped_per_node[best], key=lambda l: l.vmid)[0]
             try:
-                self.proxmox.start(vmid)
+                self.proxmox.start(lxc.node, lxc.vmid)
             except Exception:
-                logger.exception("failed to start vmid=%d; will retry next tick", vmid)
-        return {"action": "scale_up", "started": candidates}
+                logger.exception(
+                    "failed to start node=%s vmid=%d; will retry next tick", lxc.node, lxc.vmid
+                )
+                continue
+            started.append((lxc.node, lxc.vmid))
+            # Update local view so the next iteration sees this worker as running.
+            stopped_per_node[best] = [l for l in stopped_per_node[best] if l.vmid != lxc.vmid]
+            running_per_node.setdefault(best, []).append(lxc)
+        if not started:
+            return {"action": "scale_up_blocked", "wanted": count}
+        return {"action": "scale_up", "started": started}
 
-    def _scale_down(self, running: list[int], count: int) -> dict:
-        # Cooldown gate: don't churn workers up and down. Without this, a brief
-        # burst-then-empty queue could thrash the LXCs.
+    # --- scale down ---
+
+    def _scale_down(self, running_per_node: dict[str, list], count: int) -> dict:
         now = self._clock()
         if now - self._last_scale_down_at < self.config.cooldown_seconds:
             return {
                 "action": "scale_down_cooldown",
                 "remaining": self.config.cooldown_seconds - (now - self._last_scale_down_at),
             }
-        # Stop the highest-numbered VMIDs first — symmetric with start order.
-        candidates = sorted(running, reverse=True)[:count]
-        for vmid in candidates:
+        stopped: list[tuple[str, int]] = []
+        for _ in range(count):
+            # Pick the node with the most running workers (load-shedding).
+            eligible = [(n, lxcs) for n, lxcs in running_per_node.items() if lxcs]
+            if not eligible:
+                break
+            n, lxcs = max(eligible, key=lambda nl: len(nl[1]))
+            # Stop highest VMID first on that node.
+            lxc = sorted(lxcs, key=lambda l: l.vmid, reverse=True)[0]
             try:
-                self.proxmox.stop(vmid)
+                self.proxmox.stop(lxc.node, lxc.vmid)
             except Exception:
-                logger.exception("failed to stop vmid=%d; will retry next tick", vmid)
-        self._last_scale_down_at = now
-        return {"action": "scale_down", "stopped": candidates}
+                logger.exception(
+                    "failed to stop node=%s vmid=%d; will retry next tick", lxc.node, lxc.vmid
+                )
+                continue
+            stopped.append((lxc.node, lxc.vmid))
+            running_per_node[n] = [l for l in lxcs if l.vmid != lxc.vmid]
+        if stopped:
+            self._last_scale_down_at = now
+            return {"action": "scale_down", "stopped": stopped}
+        return {"action": "scale_down_blocked"}

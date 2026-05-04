@@ -29,7 +29,6 @@ def main() -> int:
         host=cfg.proxmox_host,
         token_id=cfg.proxmox_token_id,
         token_secret=cfg.proxmox_token_secret,
-        node=cfg.proxmox_node,
         verify_ssl=cfg.proxmox_verify_ssl,
     )
     scaler = Scaler(cfg, fleet, proxmox)

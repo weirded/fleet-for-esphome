@@ -33,25 +33,31 @@ Same architectural shape as `deploy/kubernetes/` (PR #107), but for a Proxmox VE
 Every `poll_interval` seconds the scaler:
 
 1. Reads `queue_size` from the Fleet server.
-2. Computes desired worker count: `ceil(queue_size / target_per_worker)`, clamped to `[min_workers, max_workers]`.
-3. Reconciles the pool: starts stopped LXCs until enough are running; stops running LXCs (after `cooldown_seconds`) when fewer are needed.
+2. Discovers all LXCs in the cluster carrying the worker tag (default `esphome-fleet-worker`), grouped by Proxmox node.
+3. Computes desired total worker count: `ceil(queue_size / target_per_worker)`, clamped to `[min_total_workers, sum(per_node_max)]`.
+4. Reconciles the pool: starts stopped LXCs (preferring nodes with the most free capacity) until enough are running; after `cooldown_seconds`, stops the highest-VMID running LXC on the busiest node when fewer are needed.
 
-LXCs themselves are **pre-provisioned** by the operator (clone a template, install the worker image, configure autostart). The scaler only manages start/stop of an existing pool. This keeps the scaler small and avoids the failure modes of cloning-on-demand (template versioning, storage races, network setup).
+**Per-node sizing.** Default is **one LXC per Proxmox node**. Override on beefy nodes (`PROXMOX_SCALER_PER_NODE_OVERRIDES=pve-beast:4`) or skip lightweight ones with `:0`. Most homelabs run with the default and call it good; the override is for clusters where one host is much faster than the others and you want it to do more of the work.
+
+**LXCs themselves are pre-provisioned** by the operator (or by `provision-node.sh` / Terraform — see `deploy/scripts/` and `deploy/terraform/`). The scaler only manages start/stop of an already-discovered pool. This keeps the scaler small and avoids the failure modes of clone-on-demand (template versioning, storage races, network setup).
 
 ## Quick start
 
-### 1. Pre-provision an LXC pool on Proxmox
+### 1. Provision the LXC pool on Proxmox
 
-Create one LXC manually with:
-- A Linux distro that runs Docker (Debian/Ubuntu).
-- Docker installed, `ghcr.io/weirded/esphome-dist-client:latest` configured to autostart with the Fleet server URL and token in its env. (Or run the worker via a Python venv; either works — the LXC just needs to register with the Fleet server on boot.)
-- Network access to (a) the Fleet server's worker API (port 8765) and (b) your ESP devices' subnet.
+Pick one of:
 
-Clone N copies (e.g., VMIDs 200–205) so you have a pool. **Each clone must have a unique hostname** so Fleet can tell them apart in the Workers tab.
+- **`deploy/scripts/provision-node.sh`** (recommended) — creates LXCs from scratch on a Proxmox node. Downloads the Debian 12 LXC template, installs Docker, configures the worker container as a systemd unit, applies the discovery tag, stops the LXC. Run once per node.
+
+- **`deploy/terraform/`** — multi-node Terraform module that clones a pre-built template across all your nodes with per-node counts. Better if you already use IaC.
+
+- **`deploy/scripts/bootstrap-pool.sh`** — clones a pre-built template into a single-node pool. Faster than `provision-node.sh` (no first-boot install) but assumes you've baked a template by hand.
+
+Whichever path you pick, the result is a pool of LXC workers carrying the `esphome-fleet-worker` tag, configured to autostart the worker container on boot, currently stopped.
 
 ### 2. Configure the scaler
 
-Copy `config.example.env` and fill in:
+Copy `config.example.env` and fill in the required fields. Default behavior is **1 worker per Proxmox node** with no always-on baseline:
 
 ```ini
 PROXMOX_SCALER_FLEET_URL=http://homeassistant.local:8765
@@ -60,17 +66,13 @@ PROXMOX_SCALER_FLEET_TOKEN=<paste from Fleet Settings drawer>
 PROXMOX_SCALER_PROXMOX_HOST=proxmox.example.com:8006
 PROXMOX_SCALER_PROXMOX_TOKEN_ID=root@pam!scaler
 PROXMOX_SCALER_PROXMOX_TOKEN_SECRET=<api token secret>
-PROXMOX_SCALER_PROXMOX_NODE=pve
 
-PROXMOX_SCALER_VMIDS=200,201,202,203,204,205
-PROXMOX_SCALER_MIN_WORKERS=1
-PROXMOX_SCALER_MAX_WORKERS=5
-PROXMOX_SCALER_TARGET_PER_WORKER=2
-PROXMOX_SCALER_POLL_INTERVAL=30
-PROXMOX_SCALER_COOLDOWN_SECONDS=600
+# Default: 1 worker per node. Bump for beefier nodes.
+PROXMOX_SCALER_WORKERS_PER_NODE=1
+# PROXMOX_SCALER_PER_NODE_OVERRIDES=pve-beast:4,pve-tiny:0
 ```
 
-The Proxmox API token needs `VM.PowerMgmt` and `VM.Audit` permissions on the LXC pool.
+The Proxmox API token needs `VM.PowerMgmt` and `VM.Audit` permissions on the pool LXCs (and `VM.Allocate` + `VM.Config.*` if you'll also use the Terraform/provision scripts with the same token).
 
 ### 3. Run it
 

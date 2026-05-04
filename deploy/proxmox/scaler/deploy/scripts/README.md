@@ -1,12 +1,45 @@
-# Pool bootstrap (shell-script path)
+# Proxmox provisioning scripts
 
-If you don't want Terraform, `bootstrap-pool.sh` does the same job: clone an LXC template into a pool of N workers, idempotently.
+Two scripts. Pick the one that matches your starting point.
 
-## Use
+| Script | Use when |
+| --- | --- |
+| `provision-node.sh` | You don't have a worker template yet. The script creates LXCs from scratch (Debian 12 + Docker + worker autostart). One run per Proxmox node. |
+| `bootstrap-pool.sh` | You already pre-built an LXC template manually. The script clones the template into a pool. Faster but assumes the template exists. |
 
-1. SSH to your Proxmox host as root.
-2. Copy `bootstrap-pool.sh` over (or pull the repo).
-3. Set the env vars and run:
+Both are run on the Proxmox host (root) and are idempotent — re-running with the same VMIDs leaves existing tagged LXCs alone.
+
+## Recommended: `provision-node.sh` (no manual template needed)
+
+Run once per node, with that node's chunk of VMIDs:
+
+```bash
+# On pve1
+FLEET_URL=http://homeassistant.local:8765 \
+FLEET_TOKEN=<paste from Fleet Settings drawer> \
+POOL_VMIDS="200 201" \
+./provision-node.sh
+
+# On pve-beast (4-worker node)
+FLEET_URL=http://homeassistant.local:8765 \
+FLEET_TOKEN=<paste from Fleet Settings drawer> \
+POOL_VMIDS="300 301 302 303" \
+./provision-node.sh
+```
+
+What it does:
+
+1. Downloads the Debian 12 LXC template via `pveam` if not already cached.
+2. Creates each LXC with `pct create` (sane defaults for an unprivileged worker container).
+3. Boots the LXC, installs Docker (official APT repo), configures the worker container as a systemd unit (`esphome-fleet-worker.service`), enables it on boot.
+4. Tags each LXC with `esphome-fleet-worker` so the scaler discovers them.
+5. Stops the LXC (the scaler manages start/stop after).
+
+Re-running is safe: existing LXCs with the `esphome-fleet-worker` tag are skipped. LXCs with the same VMID but **without** the tag abort the run (so we don't clobber unrelated containers).
+
+## Alternative: `bootstrap-pool.sh` (clone an existing template)
+
+If you've already built a template LXC by hand, this script clones from it:
 
 ```bash
 TEMPLATE_VMID=900 \
@@ -17,14 +50,6 @@ POOL_BRIDGE=vmbr0 \
 ./bootstrap-pool.sh
 ```
 
-## What it does (and doesn't)
+Faster than `provision-node.sh` (linked/full clones avoid the apt + Docker install step) but you have to maintain the template. If the worker image gets updated, you re-bake the template + re-clone. With `provision-node.sh`, the worker container's `--pull always` plus systemd takes care of image updates per-LXC.
 
-- ✅ Clones the template `TEMPLATE_VMID` into each VMID listed in `POOL_VMIDS`.
-- ✅ Sets a unique hostname per clone via `POOL_HOSTNAME_FMT`.
-- ✅ Reconfigures `net0` to use `POOL_BRIDGE` with DHCP.
-- ✅ Idempotent — existing VMIDs are skipped, not overwritten.
-- ❌ Does NOT start the clones. The scaler handles start/stop after the pool exists.
-- ❌ Does NOT create the template — that's a one-time manual step (see prerequisites in the script header).
-- ❌ Does NOT create the Proxmox API token for the scaler — do that in the Proxmox UI or with `pveum`.
-
-For an IaC-managed alternative, see `deploy/proxmox/scaler/deploy/terraform/`.
+## For an IaC-managed alternative, see `deploy/proxmox/scaler/deploy/terraform/`.
