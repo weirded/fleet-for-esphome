@@ -186,6 +186,7 @@ export interface Target {
     ota_result: string | null;
     validate_only: boolean;
     download_only: boolean;
+    server_ota?: boolean;
     /** ``history`` = recorded by this server in SQLite. ``device`` = parsed
      * from the running firmware's ESPHome ``compilation_time`` string
      * (approximate; build-host local time, success state assumed). */
@@ -425,6 +426,8 @@ export interface Job {
   validate_only?: boolean;
   /** FD.1: compile-and-download mode — skips OTA, binary uploaded to server. */
   download_only?: boolean;
+  /** SOTA.1: compile on worker, OTA pushed from server. Auto-set for Thread devices. */
+  server_ota?: boolean;
   /** FD.1: true once the worker has POSTed the .bin and it's available
    *  from GET /ui/api/jobs/{id}/firmware. Drives the Queue tab's Download
    *  button visibility. */

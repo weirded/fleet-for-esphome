@@ -14,10 +14,12 @@ Fleet for ESPHome is a Home Assistant add-on that manages a fleet of ESPHome dev
                  │                                 │
   Web UI  ──────►│  Server (ha-addon/server/)  ◄───│──  Worker(s)
                  │    + built-in local worker      │     (ha-addon/client/)
-                 │                                 │        │
-                 │                                 │        ▼
-                 │                                 │     ESP devices
-                 │                                 │     (OTA over WiFi)
+                 │         │                       │        │
+                 │         │ OTA (Thread/Matter    │        │ OTA (WiFi/Ethernet
+                 │         │  — IPv6 mesh only     │        │  — worker needs
+                 │         │  reachable from HA)   │        │  LAN reach to ESP)
+                 │         ▼                       │        ▼
+                 │    ESP Thread devices           │     ESP devices
 ```
 
 ### Server (`ha-addon/server/`)
@@ -39,7 +41,9 @@ An `aiohttp` async app. It's the only thing users interact with directly; everyt
 
 ### Worker (`ha-addon/client/`)
 
-A small synchronous polling loop. Registers with the server, polls for jobs, ensures the correct ESPHome version is installed into its own `/esphome-versions/<version>/` venv cache, extracts the bundle, runs `esphome run`, and OTA-uploads the firmware directly to the target ESP. Heartbeats on a background thread. Because the worker does the OTA upload, it needs network reach to the ESP devices on its own LAN segment — the server doesn't see the device traffic.
+A small synchronous polling loop. Registers with the server, polls for jobs, ensures the correct ESPHome version is installed into its own `/esphome-versions/<version>/` venv cache, extracts the bundle, runs `esphome run`, and OTA-uploads the firmware directly to the target ESP. Heartbeats on a background thread. Because the worker does the OTA upload, it needs network reach to the ESP devices on its own LAN segment.
+
+**Exception — Thread/Matter devices:** Thread devices use an IPv6 mesh that is only reachable from the HA host, not from remote workers on a different subnet. For these targets the worker compiles and uploads the binary to the server (same as the `download_only` path), and then the server performs the OTA push via `esphome upload`. Auto-detected via the `openthread:` block in the device YAML; any worker can claim the compile job.
 
 Workers auto-update the Python source at every heartbeat (the server pushes any source changes that match the worker's `IMAGE_VERSION`). The Docker image itself only refreshes when the operator runs `docker pull`; a minimum-image-version gate on the server refuses source-code pushes to an image that's too old to apply them safely.
 

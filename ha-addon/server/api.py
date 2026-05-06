@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
+import tarfile
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -35,6 +38,8 @@ from protocol import (
     WorkerDiagnosticsUpload,
     WorkerLogAppend,
 )
+import firmware_storage
+import scanner as _scanner
 from scanner import create_bundle_async, get_esphome_version
 
 # Worker code bundled inside this container
@@ -558,10 +563,145 @@ async def get_next_job(request: web.Request) -> web.Response:
         ota_only=job.ota_only,
         validate_only=job.validate_only,
         download_only=job.download_only,
+        server_ota=job.server_ota,
         ota_address=job.ota_address,
         server_timezone=server_tz,
     )
     return web.json_response(assignment.model_dump(exclude_none=True))
+
+
+async def _server_ota_push(app: web.Application, job: object) -> None:
+    """SOTA.2: perform server-side OTA after a server_ota compile job succeeds.
+
+    Any worker can compile; this function runs on the server (HA host) which
+    has direct access to Thread/Matter device IPv6 addresses. Reads the OTA
+    binary from firmware_storage, extracts the config bundle to a temp dir,
+    and runs ``esphome upload --device <addr> --file <bin> <target.yaml>``.
+    Updates ota_result on the job via patch_ota_result so the Queue tab shows
+    the final outcome. Fires as a fire-and-forget asyncio.Task.
+    """
+    queue = app["queue"]
+    cfg: AppConfig = app["config"]
+    job_id: str = job.id  # type: ignore[attr-defined]
+    ota_addr: str = job.ota_address  # type: ignore[attr-defined]
+    target: str = job.target  # type: ignore[attr-defined]
+
+    if not _scanner._esphome_ready.is_set() or not _scanner._server_esphome_bin:
+        logger.error("Server OTA %s: ESPHome not ready on server", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+    esphome_bin: str = _scanner._server_esphome_bin
+
+    ota_binary = (
+        firmware_storage.read_firmware(job_id, variant="ota")
+        or firmware_storage.read_firmware(job_id, variant="firmware")
+        or firmware_storage.read_firmware(job_id, variant="factory")
+    )
+    if not ota_binary:
+        logger.error("Server OTA %s: no firmware binary found in storage", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    try:
+        bundle_bytes = await create_bundle_async(cfg.config_dir, target)
+    except Exception:
+        logger.exception("Server OTA %s: config bundle creation failed", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    ota_ok = False
+    ota_log = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"sota-{job_id[:8]}-") as tmpdir:
+            with tarfile.open(fileobj=io.BytesIO(bundle_bytes), mode="r:gz") as tf:
+                tf.extractall(tmpdir)
+
+            target_yaml = Path(tmpdir) / target
+            if not target_yaml.exists():
+                logger.error(
+                    "Server OTA %s: target %s not found in bundle", job_id, target
+                )
+                await queue.patch_ota_result(job_id, "failed")
+                return
+
+            ota_bin_path = target_yaml.with_suffix(".ota.bin")
+            ota_bin_path.write_bytes(ota_binary)
+
+            # Pre-flight ping to surface connectivity issues early in the log.
+            # Runs on the server (HA host), not on the compile worker.
+            import socket as _socket  # noqa: PLC0415
+            server_hostname = _socket.gethostname()
+            ping_cmd = ["ping6", "-c", "3", "-W", "5", ota_addr]
+            logger.info(
+                "Server OTA %s: pinging %s from server (%s)",
+                job_id, ota_addr, server_hostname,
+            )
+            try:
+                ping_proc = await asyncio.create_subprocess_exec(
+                    *ping_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                ping_out, _ = await asyncio.wait_for(ping_proc.communicate(), timeout=20)
+                ping_log = ping_out.decode("utf-8", errors="replace") if ping_out else ""
+                ping_ok = ping_proc.returncode == 0
+                logger.info(
+                    "Server OTA %s: ping %s — %s",
+                    job_id, ota_addr, "reachable" if ping_ok else "unreachable",
+                )
+            except Exception as ping_exc:
+                ping_log = f"ping failed: {ping_exc}"
+                ping_ok = False
+                logger.warning("Server OTA %s: ping error: %s", job_id, ping_exc)
+
+            cmd = [
+                esphome_bin, "upload",
+                "--device", ota_addr,
+                "--file", str(ota_bin_path),
+                str(target_yaml),
+            ]
+            logger.info(
+                "Server OTA %s (%s): %s", job_id, target, " ".join(cmd)
+            )
+            ota_log = f"--- ping {ota_addr} from server ({server_hostname}) ---\n{ping_log}\n"
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=tmpdir,
+                )
+                stdout_bytes, _ = await asyncio.wait_for(
+                    proc.communicate(), timeout=300
+                )
+                ota_ok = proc.returncode == 0
+                ota_log += stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+            except asyncio.TimeoutError:
+                ota_ok = False
+                ota_log += "Server OTA timed out after 300s"
+            except Exception as exc:
+                ota_ok = False
+                ota_log += f"Server OTA subprocess error: {exc}"
+    except Exception:
+        logger.exception("Server OTA %s: unexpected error during OTA push", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    logger.info(
+        "Server OTA %s (%s): %s", job_id, target, "success" if ota_ok else "failed"
+    )
+    await queue.patch_ota_result(job_id, "success" if ota_ok else "failed", log=ota_log)
+
+    if ota_ok:
+        device_poller = app.get("device_poller")
+        if device_poller is not None:
+            try:
+                asyncio.create_task(device_poller.refresh_target(target))
+            except Exception:
+                logger.exception(
+                    "Server OTA %s: failed to schedule device refresh for %s",
+                    job_id, target,
+                )
 
 
 @routes.post("/api/v1/jobs/{id}/result")
@@ -585,10 +725,27 @@ async def submit_job_result(request: web.Request) -> web.Response:
     if not ok:
         return _protocol_error("job_not_found_or_wrong_state", status=404)
 
+    # SOTA.2: after a server_ota compile succeeds, push OTA from the server.
+    # The worker submitted ota_result=None (compile only); the server now
+    # performs the actual flash using esphome upload server-side.
+    refreshed_job = queue.get(job_id)
+    if (
+        refreshed_job is not None
+        and getattr(refreshed_job, "server_ota", False)
+        and msg.status == "success"
+        and refreshed_job.has_firmware
+        and refreshed_job.ota_address
+    ):
+        try:
+            asyncio.create_task(_server_ota_push(request.app, refreshed_job))
+        except Exception:
+            logger.exception("Failed to schedule server OTA push for job %s", job_id)
+
     # #11: trigger an immediate device-info refresh after a successful OTA so
     # the UI sees the new running_version + compilation_time within ~1s
     # instead of waiting up to one device_poller cycle (default 60s). Skip on
     # failures and on validate-only jobs (which don't change the device).
+    # server_ota jobs: _server_ota_push handles the refresh after it completes.
     if msg.status == "success" and msg.ota_result == "success" and job is not None:
         device_poller = request.app.get("device_poller")
         if device_poller is not None:

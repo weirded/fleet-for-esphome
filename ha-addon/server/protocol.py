@@ -203,6 +203,11 @@ class JobAssignment(_ProtocolMessage):
     # the server via /api/v1/jobs/{id}/firmware. The user downloads it
     # later from the Queue tab.
     download_only: bool = False
+    # SOTA.1: when true the worker compiles (like download_only) and uploads
+    # the binary; the server then performs OTA push via `esphome upload`.
+    # Used for Thread/Matter devices only reachable from the HA host.
+    # Optional + False default keeps older workers forward-compatible.
+    server_ota: bool = False
     ota_address: Optional[str] = None
     server_timezone: Optional[str] = None
 

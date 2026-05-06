@@ -48,7 +48,7 @@ Three moving parts:
 
 1. **The add-on** runs inside Home Assistant. It owns the device list, the job queue, the web UI, and coordinates everything. Workers never talk to each other; everything flows through here.
 2. **Build workers** are small Docker containers that do the actual compiling. Each worker *polls* the add-on over HTTP asking for work — it's authenticated with a bearer token, so the add-on doesn't need open inbound ports on the worker. Workers decide which ESPHome version a job needs (from the global default + any per-device pin), install that version into a local venv on first use, and keep a small LRU cache of the most recent versions so subsequent jobs start instantly. The add-on ships with a **built-in local worker** so you don't need any remote hardware to get started — just increase its slot count in the Workers tab.
-3. **ESP devices on your network** receive firmware OTA-style, directly from the worker that built it — same mechanism as the stock ESPHome dashboard, just triggered from this UI. The worker needs network reach to the device; the add-on itself does not.
+3. **ESP devices on your network** receive firmware OTA-style from the worker that built it — same mechanism as the stock ESPHome dashboard, just triggered from this UI. The worker needs network reach to the device. **Exception: Thread/Matter devices** use an IPv6 mesh only reachable from the HA host, so for those the worker compiles and hands the binary to the add-on, which performs the OTA push itself.
 
 ## Installation
 

@@ -11,6 +11,7 @@ type JobStatusLike = {
   ota_result?: string;
   validate_only?: boolean;
   download_only?: boolean;
+  server_ota?: boolean;
 };
 
 /** Job is fully done and successful.
@@ -27,6 +28,17 @@ export function isJobSuccessful(job: JobStatusLike): boolean {
   return job.ota_result === 'success';
 }
 
+// SOTA.1: server_ota jobs are "in progress" while the server is performing
+// the OTA push (state=success, ota_result=null). Terminal once ota_result
+// is set.
+export function isServerOtaPending(job: JobStatusLike): boolean {
+  return (
+    !!job.server_ota &&
+    job.state === 'success' &&
+    job.ota_result == null
+  );
+}
+
 /** Job is still in progress (not yet reached a terminal state).
  *
  * TG.9: BLOCKED is *not* terminal — it's a Pending-with-a-reason. A
@@ -38,6 +50,8 @@ export function isJobInProgress(job: JobStatusLike): boolean {
   // Compile succeeded but OTA hasn't finished yet. validate_only /
   // download_only jobs don't have an OTA phase and are terminal on
   // state=success (#23).
+  // SOTA.1: server_ota jobs stay "in progress" until the server OTA push
+  // completes (ota_result is set).
   if (
     job.state === 'success' &&
     !job.validate_only &&
@@ -93,6 +107,7 @@ export function getJobBadge(job: {
   ota_only?: boolean;
   validate_only?: boolean;
   download_only?: boolean;
+  server_ota?: boolean;
   ota_result?: string;
   status_text?: string;
 }): { label: string; cls: string } {
@@ -100,6 +115,9 @@ export function getJobBadge(job: {
     return { label: 'Validate', cls: BADGE_VARIANTS.pending };
   } else if (job.state === 'pending' && job.download_only) {
     return { label: 'Download', cls: BADGE_VARIANTS.pending };
+  } else if (job.state === 'pending' && job.server_ota) {
+    // SOTA.1: pending server_ota job — compile hasn't started yet
+    return { label: 'Server OTA', cls: BADGE_VARIANTS.pending };
   } else if (job.state === 'pending' && job.ota_only) {
     return { label: 'OTA Retry', cls: BADGE_VARIANTS.timed_out };
   } else if (job.state === 'pending') {
@@ -109,7 +127,8 @@ export function getJobBadge(job: {
     return { label: 'Blocked', cls: BADGE_VARIANTS.blocked };
   } else if (job.state === 'working' && job.validate_only) {
     return { label: job.status_text || 'Validating', cls: BADGE_VARIANTS.working };
-  } else if (job.state === 'working' && job.download_only) {
+  } else if (job.state === 'working' && (job.download_only || job.server_ota)) {
+    // SOTA.1: during compile phase, server_ota looks identical to download_only
     return { label: job.status_text || 'Compiling', cls: BADGE_VARIANTS.working };
   } else if (job.state === 'working') {
     return { label: job.status_text || 'Working', cls: BADGE_VARIANTS.working };
@@ -117,11 +136,20 @@ export function getJobBadge(job: {
     return { label: 'Failed', cls: BADGE_VARIANTS.failed };
   } else if (job.state === 'success' && job.validate_only) {
     return { label: 'Valid', cls: BADGE_VARIANTS.success };
-  } else if (job.state === 'success' && job.download_only) {
+  } else if (job.state === 'success' && job.download_only && !job.server_ota) {
     // #23: compile-and-download is terminal on state=success — no OTA
     // phase, so "OTA Pending" was misleading. "Ready" reads as "your
     // binary is ready to download".
     return { label: 'Ready', cls: BADGE_VARIANTS.success };
+  } else if (job.state === 'success' && job.server_ota) {
+    // SOTA.1: server_ota — compile done, server is pushing or has pushed OTA
+    if (job.ota_result === 'success') {
+      return { label: 'Success', cls: BADGE_VARIANTS.success };
+    } else if (job.ota_result === 'failed') {
+      return { label: 'OTA Failed', cls: BADGE_VARIANTS.timed_out };
+    } else {
+      return { label: 'Server OTA', cls: BADGE_VARIANTS.working };
+    }
   } else if (job.state === 'success') {
     if (job.ota_result === 'success') {
       return { label: 'Success', cls: BADGE_VARIANTS.success };

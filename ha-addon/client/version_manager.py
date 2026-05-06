@@ -142,15 +142,40 @@ class VersionManager:
         venv_dir = self._venv_path(version)
         logger.info("Installing esphome==%s into %s", version, venv_dir)
 
-        # Create venv
-        subprocess.run(
-            [sys.executable, "-m", "venv", str(venv_dir)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # Wipe any stale/partial venv from a previous failed attempt so we
+        # start clean (otherwise a venv missing bin/pip causes FileNotFoundError
+        # on every subsequent restart until /data is cleared).
+        if venv_dir.exists():
+            logger.info("Removing stale venv at %s before reinstall", venv_dir)
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+
+        venv_cmd = [sys.executable, "-m", "venv", str(venv_dir)]
+        logger.info("Running: %s", " ".join(venv_cmd))
+        try:
+            subprocess.run(
+                venv_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            logger.error(
+                "python -m venv failed (exit %d):\nstderr: %s\nstdout: %s",
+                exc.returncode, stderr, stdout,
+            )
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+            raise
 
         pip = venv_dir / "bin" / "pip"
+        if not pip.exists():
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+            raise RuntimeError(
+                f"venv created at {venv_dir} but bin/pip is missing — "
+                "ensurepip may be unavailable in this Python installation"
+            )
+
         install_cmd: list[str] = [
             str(pip), "install", "--no-cache-dir", f"esphome=={version}",
         ]
@@ -168,7 +193,6 @@ class VersionManager:
                 "pip install esphome==%s failed (exit %d):\nstderr: %s\nstdout: %s",
                 version, result.returncode, stderr_excerpt, stdout_excerpt,
             )
-            # Cleanup on failure
             shutil.rmtree(str(venv_dir), ignore_errors=True)
             raise RuntimeError(
                 f"pip install esphome=={version} failed (exit {result.returncode}):\n"

@@ -59,6 +59,15 @@ Largely as scoped before — adapted to ride on LL.* (LiteLLM, structured output
 - [ ] **BC.5 Result caching** — key by `(release_version, device_yaml_sha256)`. Re-opening the modal is instant; LLM calls only happen when something actually changed (release version bumps, or the device's YAML edits). Stored alongside BC.1's release notes cache.
 - [ ] **BC.6 Surface in HA Updates** — paired with the future `UE.*` work in `WORKITEMS-future.md`, expose the `risk` value on the per-device update entity's `release_summary` so HA's native update card shows "⚠ 2 high-risk components affected" without the user having to open the Fleet UI. Stretch — drop if `UE.*` isn't on the table for this release.
 
+## SOTA — Server-side OTA for Thread/Matter devices
+
+Thread devices use IPv6 mesh networking (`openthread:` YAML block) that is only reachable from the HA host. Remote workers sit on a different subnet and cannot reach Thread device IPs. The fix is a split compile/flash model: any worker compiles and uploads the binary to the server (reuses the existing `download_only` path), then the server performs OTA using `esphome upload --device <addr> --file <bin> <target.yaml>`.
+
+- [x] **SOTA.1** *(1.8.0-dev.1)* — `server_ota` field on `Job` (job_queue.py), `JobAssignment` (protocol.py — both copies, byte-identical). Worker reads the field and maps `server_ota=True` → `download_only=True`, compiling and uploading the binary without attempting OTA itself.
+- [x] **SOTA.2** *(1.8.0-dev.1)* — `_server_ota_push()` in api.py: after a `server_ota` compile succeeds, the server reads the binary from `firmware_storage`, extracts a fresh config bundle, and runs `esphome upload --device <addr> --file <bin> <target.yaml>` in a temp dir with a 120 s timeout. `patch_ota_result()` on `JobQueue` updates `ota_result` on the already-SUCCESS job without re-running the state machine.
+- [x] **SOTA.3** *(1.8.0-dev.1)* — Auto-detection at enqueue: `ui_api.start_compile()` and `scheduler.py` call `get_device_metadata()` and set `server_ota=True` when `network_type == "thread"`. Any worker can claim the compile job; the server always performs the OTA push regardless of which worker compiled.
+- [x] **SOTA.4** *(1.8.0-dev.1)* — Queue tab "Server OTA" badge: `jobState.ts` handles the multi-phase state (`pending` → `Compiling` → `Server OTA` (compile done, OTA in flight) → `Success` / `OTA Failed`). `server_ota` field added to `Job` TypeScript type and `job_history.py` schema.
+
 ## Open Bugs
 
 - [x] *(1.8.0-dev.2)* — Workers-tab Quota line was rendering red at >95 % usage even though "below the quota" is normal operating state. Threshold raised to ≥ 100 % so red only appears when a worker has actually hit its disk cap; yellow at >80 % still warns the user that the cap is approaching. `ha-addon/ui/src/components/WorkersTab.tsx:108`.

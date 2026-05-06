@@ -909,6 +909,7 @@ async def get_targets(request: web.Request) -> web.Response:
                     "ota_result": last_compile_by_target[target].get("ota_result"),
                     "validate_only": bool(last_compile_by_target[target].get("validate_only")),
                     "download_only": bool(last_compile_by_target[target].get("download_only")),
+                    "server_ota": bool(last_compile_by_target[target].get("server_ota")),
                     "source": "history",
                 }
                 if target in last_compile_by_target
@@ -2461,6 +2462,13 @@ async def start_compile(request: web.Request) -> web.Response:
             if pinned:
                 effective_version = pinned
 
+        # SOTA.3: auto-detect Thread targets. Thread devices use IPv6 mesh
+        # only reachable from the HA host, so any OTA must be server-side.
+        # Any worker can compile; the server performs the actual flash.
+        _target_meta = get_device_metadata(cfg.config_dir, target)
+        _is_thread = _target_meta.get("network_type") == "thread"
+        effective_server_ota = _is_thread or bool(body.get("server_ota", False))
+
         from settings import get_settings as _gs  # noqa: PLC0415
         from git_versioning import get_head as _get_head  # noqa: PLC0415
         job = await queue.enqueue(
@@ -2469,6 +2477,7 @@ async def start_compile(request: web.Request) -> web.Response:
             run_id=run_id,
             timeout_seconds=_gs().job_timeout,
             download_only=download_only,
+            server_ota=effective_server_ota,
             ota_address=ota_addresses.get(target),
             pinned_client_id=pinned_client_id,
             config_hash=_get_head(Path(cfg.config_dir)),
@@ -2966,11 +2975,15 @@ async def rename_target(request: web.Request) -> web.Response:
     server_version = get_esphome_version()
     from settings import get_settings as _gs  # noqa: PLC0415
     from git_versioning import get_head as _get_head  # noqa: PLC0415
+    # SOTA.3: detect Thread target for rename-triggered recompile.
+    _rename_meta = get_device_metadata(_cfg(request).config_dir, new_filename)
+    _rename_server_ota = _rename_meta.get("network_type") == "thread"
     await queue.enqueue(
         target=new_filename,
         esphome_version=server_version,
         run_id=str(uuid.uuid4()),
         timeout_seconds=_gs().job_timeout,
+        server_ota=_rename_server_ota,
         ota_address=old_device_addr,
         config_hash=_get_head(config_dir),
     )

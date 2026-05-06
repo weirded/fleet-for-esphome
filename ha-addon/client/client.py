@@ -1461,11 +1461,16 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
     ota_only = job.get("ota_only", False)
     validate_only = job.get("validate_only", False)
     download_only = job.get("download_only", False)
+    # SOTA.1: server performs OTA — worker compiles and uploads binary only.
+    # Reuses the download_only path exactly; server handles the actual flash.
+    server_ota = job.get("server_ota", False)
+    if server_ota:
+        download_only = True
 
     _log_context.current_target = target
     logger.info(
-        "Starting job %s: target=%s esphome=%s ota_only=%s validate_only=%s download_only=%s",
-        job_id, target, esphome_version, ota_only, validate_only, download_only,
+        "Starting job %s: target=%s esphome=%s ota_only=%s validate_only=%s download_only=%s server_ota=%s",
+        job_id, target, esphome_version, ota_only, validate_only, download_only, server_ota,
     )
 
     # Per-slot PlatformIO core directory — prevents cross-slot package conflicts

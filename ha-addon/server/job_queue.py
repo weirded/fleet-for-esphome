@@ -75,6 +75,12 @@ class Job:
     # binary back to the server for download. Mutually exclusive with
     # validate_only.
     download_only: bool = False
+    # SOTA.1: compile on worker, OTA from server. Worker runs esphome compile
+    # (same as download_only) and uploads the binary; server then runs
+    # `esphome upload --device <ota_address> --file <bin> <target.yaml>`.
+    # Used for Thread/Matter devices whose IPv6 mesh is only reachable from
+    # the HA host. Any worker can compile; OTA is always server-side.
+    server_ota: bool = False
     # FD.1: set to True once the worker has POSTed the binary to
     # /api/v1/jobs/{id}/firmware. Drives the Queue-tab Download button.
     has_firmware: bool = False
@@ -173,6 +179,7 @@ class Job:
             "ota_only": self.ota_only,
             "validate_only": self.validate_only,
             "download_only": self.download_only,
+            "server_ota": self.server_ota,
             "has_firmware": self.has_firmware,
             "ota_address": self.ota_address,
             "pinned_client_id": self.pinned_client_id,
@@ -215,6 +222,7 @@ class Job:
             ota_only=d.get("ota_only", False),
             validate_only=d.get("validate_only", False),
             download_only=d.get("download_only", False),
+            server_ota=d.get("server_ota", False),
             has_firmware=d.get("has_firmware", False),
             ota_address=d.get("ota_address"),
             pinned_client_id=d.get("pinned_client_id"),
@@ -433,6 +441,7 @@ class JobQueue:
         timeout_seconds: int,
         validate_only: bool = False,
         download_only: bool = False,
+        server_ota: bool = False,
         ota_address: Optional[str] = None,
         pinned_client_id: Optional[str] = None,
         config_hash: Optional[str] = None,
@@ -487,6 +496,7 @@ class JobQueue:
                 followup.esphome_version = esphome_version
                 followup.pinned_client_id = pinned_client_id
                 followup.ota_address = ota_address
+                followup.server_ota = server_ota
                 followup.timeout_seconds = timeout_seconds
                 followup.run_id = run_id  # belongs to the latest request
                 followup.worker_tag_filter = worker_tag_filter
@@ -546,6 +556,7 @@ class JobQueue:
                 timeout_seconds=timeout_seconds,
                 validate_only=validate_only,
                 download_only=download_only,
+                server_ota=server_ota,
                 ota_address=ota_address,
                 pinned_client_id=pinned_client_id,
                 is_followup=is_followup,
@@ -1006,6 +1017,7 @@ class JobQueue:
                     run_id=run_id,
                     timeout_seconds=timeout_seconds,
                     ota_only=is_ota_failed,
+                    server_ota=job.server_ota,
                     pinned_client_id=pin_to,
                     config_hash=config_hash,
                 )
@@ -1018,6 +1030,23 @@ class JobQueue:
             if new_jobs:
                 self._persist()
             return new_jobs
+
+    async def patch_ota_result(
+        self, job_id: str, ota_result: str, log: Optional[str] = None
+    ) -> None:
+        """SOTA.2: set ota_result on an already-terminal job after server-side OTA.
+
+        Does not re-run the state machine — job remains SUCCESS. Appends the
+        server OTA log to any existing log so the Queue tab log modal shows it.
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.ota_result = ota_result
+            if log:
+                job.log = (job.log or "") + "\n--- Server OTA ---\n" + log
+            self._persist()
 
     async def update_status(self, job_id: str, status_text: str) -> bool:
         """Update the in-progress status text for a running job (not persisted)."""

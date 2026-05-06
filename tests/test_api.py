@@ -1642,3 +1642,124 @@ async def test_firmware_upload_accepted_for_matching_assigned_worker(
         assert ta.queue.get(job.id).has_firmware is True
     finally:
         await ta.close()
+
+
+# ---------------------------------------------------------------------------
+# SOTA.1 — server_ota
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_ota_flag_threaded_through_job_assignment(tmp_path):
+    """server_ota=True on the Job must appear in the JobAssignment payload."""
+    ta = await _make_app(tmp_path)
+    try:
+        job = await ta.queue.enqueue(
+            target="thread-dev.yaml", esphome_version="2026.4.3", run_id="r",
+            timeout_seconds=300, server_ota=True, ota_address="fd00::1",
+        )
+        assert job is not None
+        assert job.server_ota is True
+        client_id = await _register(ta, hostname="w")
+
+        with patch("api.create_bundle_async", new=AsyncMock(return_value=_make_test_bundle())):
+            resp = await ta.get(
+                "/api/v1/jobs/next",
+                headers={**AUTH_HEADERS, "X-Client-Id": client_id},
+            )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["server_ota"] is True
+        assert data["ota_address"] == "fd00::1"
+    finally:
+        await ta.close()
+
+
+@pytest.mark.asyncio
+async def test_patch_ota_result_updates_job(tmp_path):
+    """patch_ota_result sets ota_result on an already-SUCCESS job."""
+    ta = await _make_app(tmp_path)
+    try:
+        job = await ta.queue.enqueue(
+            target="x.yaml", esphome_version="2026.4.3", run_id="r",
+            timeout_seconds=300, server_ota=True, ota_address="fd00::1",
+        )
+        assert job is not None
+        await _register(ta, hostname="w")
+        await ta.queue.claim_next("any-client")
+        await ta.queue.submit_result(job.id, "success", log=None, ota_result=None)
+
+        assert ta.queue.get(job.id).ota_result is None
+        await ta.queue.patch_ota_result(job.id, "success", log="OTA done")
+
+        updated = ta.queue.get(job.id)
+        assert updated is not None
+        assert updated.ota_result == "success"
+        assert "OTA done" in (updated.log or "")
+    finally:
+        await ta.close()
+
+
+@pytest.mark.asyncio
+async def test_patch_ota_result_failed_leaves_job_success(tmp_path):
+    """OTA failure from server-side push keeps the job in SUCCESS state."""
+    ta = await _make_app(tmp_path)
+    try:
+        job = await ta.queue.enqueue(
+            target="x.yaml", esphome_version="2026.4.3", run_id="r",
+            timeout_seconds=300, server_ota=True, ota_address="fd00::1",
+        )
+        assert job is not None
+        await _register(ta, hostname="w")
+        await ta.queue.claim_next("any-client")
+        await ta.queue.submit_result(job.id, "success", log=None, ota_result=None)
+        await ta.queue.patch_ota_result(job.id, "failed")
+
+        updated = ta.queue.get(job.id)
+        assert updated is not None
+        assert updated.state == JobState.SUCCESS
+        assert updated.ota_result == "failed"
+    finally:
+        await ta.close()
+
+
+@pytest.mark.asyncio
+async def test_submit_result_triggers_server_ota_push(tmp_path, monkeypatch):
+    """submit_job_result fires _server_ota_push when server_ota=True and binary present."""
+    import firmware_storage
+    firmware_dir = tmp_path / "firmware"
+    monkeypatch.setattr(firmware_storage, "DEFAULT_FIRMWARE_DIR", firmware_dir)
+
+    push_calls: list = []
+
+    async def _fake_push(app, job):
+        push_calls.append(job.id)
+
+    monkeypatch.setattr(api_module, "_server_ota_push", _fake_push)
+
+    ta = await _make_app(tmp_path)
+    try:
+        job = await ta.queue.enqueue(
+            target="x.yaml", esphome_version="2026.4.3", run_id="r",
+            timeout_seconds=300, server_ota=True, ota_address="fd00::1",
+        )
+        assert job is not None
+        await _register(ta, hostname="w")
+        await ta.queue.claim_next("any-client")
+
+        # Upload firmware (needed for trigger condition)
+        firmware_storage.save_firmware(job.id, b"\xff" * 10, variant="ota", root=firmware_dir)
+        await ta.queue.mark_firmware_stored(job.id)
+
+        resp = await ta.post(
+            f"/api/v1/jobs/{job.id}/result",
+            json={"status": "success", "ota_result": None},
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status == 200
+
+        # Allow the async task to run
+        await asyncio.sleep(0)
+        assert push_calls == [job.id]
+    finally:
+        await ta.close()
