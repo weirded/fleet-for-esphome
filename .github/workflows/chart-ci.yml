@@ -60,8 +60,37 @@ jobs:
       - name: helm template — host network
         run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-host-network.yaml > /tmp/render-host-network.yaml
 
+      - name: Install kubeconform
+        # Installed from the GitHub release tarball (hash-pinned) instead of
+        # `uses: docker://ghcr.io/yannh/kubeconform:...@sha256:...`. Two reasons:
+        #   1. CLAUDE.md SC.1 (scripts/check-invariants.sh) requires every
+        #      `uses: org/repo@<ref>` to be a 40-char commit SHA — the docker
+        #      `@sha256:<digest>` form is 64 hex chars and trips the linter.
+        #   2. Avoids ghcr.io anonymous-pull rate-limits / transient image-pull
+        #      failures that fail the job before the kubeconform step runs.
+        # The release tarball is sha256-pinned below, so a tampered upload
+        # can't silently swap the binary out from under us.
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=v0.6.7
+          KUBECONFORM_SHA256=95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+          curl -fsSL -o kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          rm -f kubeconform kubeconform.tar.gz
+          kubeconform -v
+
       - name: Validate rendered manifests with kubeconform
-        uses: docker://ghcr.io/yannh/kubeconform:v0.6.7@sha256:23b5ed42213f2ed0d6cca74b0afa86dcd5b5e11d61fbe6c4caaa31efe7b5eb02
-        with:
-          args: -summary -strict -ignore-missing-schemas -kubernetes-version 1.30.0 /tmp/render-minimal.yaml /tmp/render-autoscale.yaml /tmp/render-existing-secret.yaml /tmp/render-host-network.yaml
-        continue-on-error: true
+        # `-ignore-missing-schemas` skips KEDA CRDs (no schema in the default
+        # store) while still hard-failing on stock Kubernetes resources — a
+        # failure here means a manifest is genuinely broken and should block
+        # the PR (no `continue-on-error`).
+        run: |
+          kubeconform -summary -strict -ignore-missing-schemas \
+            -kubernetes-version 1.30.0 \
+            /tmp/render-minimal.yaml \
+            /tmp/render-autoscale.yaml \
+            /tmp/render-existing-secret.yaml \
+            /tmp/render-host-network.yaml
