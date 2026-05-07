@@ -37,19 +37,21 @@ test('clicking Edit opens the editor modal with Monaco', async ({ page }) => {
   ).toContainText(/esphome|wifi|api/, { timeout: 10_000 });
 });
 
-test('editor modal has Save, Validate, and Save & Upgrade buttons', async ({ page }) => {
+test('editor modal has Save, Save & Close, Validate, and Save & Upgrade buttons', async ({ page }) => {
   await openEditor(page);
-  // Save button (exact match avoids matching "Save & Upgrade")
+  // Save button (exact match avoids matching the longer compound names)
   await expect(page.getByRole('button', { name: /^save$/i })).toBeVisible();
+  // Save & Close — the new commit-trigger button (bug #136 follow-up).
+  await expect(page.getByRole('button', { name: /save & close/i })).toBeVisible();
   // Save & Upgrade
   await expect(page.getByRole('button', { name: /save & upgrade/i })).toBeVisible();
   // Validate
   await expect(page.getByRole('button', { name: /^validate$/i })).toBeVisible();
 });
 
-test('clicking Save fires the save API, shows a toast, and keeps the modal open', async ({ page }) => {
+test('clicking Save writes to disk, skips the commit, and keeps the modal open', async ({ page }) => {
   let saveHits = 0;
-  let lastBody: { content?: string; commit_message?: string } | null = null;
+  let lastBody: { content?: string; skip_commit?: boolean; commit_message?: string } | null = null;
   await page.route('**/ui/api/targets/*/content', async route => {
     if (route.request().method() === 'POST') {
       saveHits++;
@@ -62,26 +64,64 @@ test('clicking Save fires the save API, shows a toast, and keeps the modal open'
   await openEditor(page);
   await page.getByRole('button', { name: /^save$/i }).click();
 
-  // Bug #24: Save now opens a commit-message dialog (auto-commit ON by
-  // default per the fixture). Type a message and confirm. The same dialog
-  // also handles the blank-message → fallback-subject path.
-  const commitDialog = page.getByRole('dialog').filter({ hasText: /commit message for save/i });
-  await expect(commitDialog).toBeVisible();
-  await commitDialog.getByPlaceholder(/^save:/).fill('tidied wifi block');
-  await commitDialog.getByRole('button', { name: /save and commit/i }).click();
-
+  // Bug #136 follow-up: plain Save no longer prompts for a commit message;
+  // it just writes the file with skip_commit:true so the user controls
+  // when a commit lands via Save & Close.
   await expect.poll(() => saveHits).toBeGreaterThan(0);
-  expect(lastBody?.commit_message).toBe('tidied wifi block');
+  expect(lastBody?.skip_commit).toBe(true);
+  expect(lastBody?.commit_message).toBeUndefined();
 
-  // Bug #136: after save the modal must remain open — Close is now explicit.
+  // The commit-message dialog must NOT appear for plain Save.
+  await expect(
+    page.getByRole('dialog').filter({ hasText: /commit message/i }),
+  ).toHaveCount(0);
+
+  // Modal stays open.
   await expect(page.locator('.monaco-editor').first()).toBeVisible();
 });
 
-test('Ctrl+S in the editor fires the save API (bug #135)', async ({ page }) => {
+test('clicking Save & Close writes the file then commits via /files/{f}/commit', async ({ page }) => {
   let saveHits = 0;
+  let commitHits = 0;
+  let lastSaveBody: { skip_commit?: boolean } | null = null;
   await page.route('**/ui/api/targets/*/content', async route => {
     if (route.request().method() === 'POST') {
       saveHits++;
+      lastSaveBody = route.request().postDataJSON() as typeof lastSaveBody;
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fallback();
+  });
+  await page.route('**/ui/api/files/*/commit', async route => {
+    if (route.request().method() === 'POST') {
+      commitHits++;
+      return route.fulfill({
+        json: { committed: true, short_hash: 'deadbee', subject: 'save: x' },
+      });
+    }
+    return route.fallback();
+  });
+
+  await openEditor(page);
+  await page.getByRole('button', { name: /save & close/i }).click();
+
+  // With auto-commit ON (the test fixture default) the silent path runs —
+  // no dialog, just save+commit+close.
+  await expect.poll(() => saveHits).toBeGreaterThan(0);
+  await expect.poll(() => commitHits).toBeGreaterThan(0);
+  expect(lastSaveBody?.skip_commit).toBe(true);
+
+  // Modal closes on success.
+  await expect(page.locator('.monaco-editor').first()).not.toBeVisible({ timeout: 5000 });
+});
+
+test('Ctrl+S in the editor fires the save API without committing (bug #135 + #136 follow-up)', async ({ page }) => {
+  let saveHits = 0;
+  let lastBody: { skip_commit?: boolean } | null = null;
+  await page.route('**/ui/api/targets/*/content', async route => {
+    if (route.request().method() === 'POST') {
+      saveHits++;
+      lastBody = route.request().postDataJSON() as typeof lastBody;
       return route.fulfill({ json: { ok: true } });
     }
     return route.fallback();
@@ -91,19 +131,13 @@ test('Ctrl+S in the editor fires the save API (bug #135)', async ({ page }) => {
   // Click inside the editor so Monaco has keyboard focus before Ctrl+S.
   await page.locator('.monaco-editor').first().click();
 
-  // With auto-commit ON the commit-message dialog opens. Press Ctrl+S and
-  // confirm the dialog to complete the save flow.
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.keyboard.press(`${modifier}+s`);
 
-  // Commit-message dialog should appear (same as clicking Save).
-  const commitDialog = page.getByRole('dialog').filter({ hasText: /commit message for save/i });
-  await expect(commitDialog).toBeVisible();
-  await commitDialog.getByRole('button', { name: /save and commit/i }).click();
-
   await expect.poll(() => saveHits, { message: 'Ctrl+S should trigger the save API' }).toBeGreaterThan(0);
+  expect(lastBody?.skip_commit).toBe(true);
 
-  // Bug #136: modal stays open after Ctrl+S save.
+  // Modal stays open.
   await expect(page.locator('.monaco-editor').first()).toBeVisible();
 });
 

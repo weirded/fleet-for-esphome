@@ -477,9 +477,11 @@ export async function saveTargetContent(
   filename: string,
   content: string,
   commitMessage?: string,
+  skipCommit?: boolean,
 ): Promise<{ renamedTo: string | null }> {
   const body: Record<string, unknown> = { content };
   if (commitMessage && commitMessage.trim()) body.commit_message = commitMessage.trim();
+  if (skipCommit) body.skip_commit = true;
   const data = await parseResponse<SaveTargetResponse>(
     await apiFetch(`./ui/api/targets/${encodeURIComponent(filename)}/content`, {
       method: 'POST',

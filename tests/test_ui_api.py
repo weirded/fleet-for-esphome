@@ -1616,6 +1616,61 @@ async def test_editor_save_triggers_auto_commit(tmp_path, _settings_init):
         await ta.close()
 
 
+async def test_editor_save_with_skip_commit_writes_file_but_no_commit(
+    tmp_path, _settings_init,
+):
+    """Bug #136 follow-up: ``skip_commit: true`` writes the file but
+    leaves the commit step to the explicit Save & Close path."""
+    import subprocess
+
+    import git_versioning as gv
+    gv._reset_for_tests()
+
+    ta = await _make_ui_app(tmp_path)
+    try:
+        _write_config(ta.config_dir, "bedroom.yaml", "bedroom")
+        gv.init_repo(ta.config_dir)
+
+        # Snapshot current commit count so we can assert no NEW commit lands.
+        baseline = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(ta.config_dir), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        old = gv.DEBOUNCE_SECONDS
+        gv.DEBOUNCE_SECONDS = 0.05
+        try:
+            resp = await ta.post(
+                "/ui/api/targets/bedroom.yaml/content",
+                json={
+                    "content": "esphome:\n  name: bedroom\n# edited via plain Save\n",
+                    "skip_commit": True,
+                },
+            )
+            assert resp.status == 200
+            await gv.drain_pending_commits()
+        finally:
+            gv.DEBOUNCE_SECONDS = old
+
+        # File written.
+        assert (
+            "edited via plain Save"
+            in (ta.config_dir / "bedroom.yaml").read_text()
+        )
+
+        # No new commit landed — the commit count is unchanged from baseline.
+        after = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(ta.config_dir), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert after == baseline, (
+            f"skip_commit=true must not produce a commit (was {baseline}, now {after})"
+        )
+    finally:
+        gv._reset_for_tests()
+        await ta.close()
+
+
 async def test_file_history_endpoint_returns_entries(tmp_path, _settings_init):
     """AV.3: GET /ui/api/files/{f}/history returns the file's commit log."""
     import subprocess

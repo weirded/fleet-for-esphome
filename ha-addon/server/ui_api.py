@@ -2557,6 +2557,12 @@ async def save_target_content(request: web.Request) -> web.Response:
     # /files/{f}/commit path for that case.
     raw_msg = body.get("commit_message")
     commit_message = raw_msg.strip() if isinstance(raw_msg, str) and raw_msg.strip() else None
+    # Bug #136 follow-up: editor's plain Save now writes the file but
+    # skips the implicit commit; the Save & Close path handles the
+    # commit explicitly via commit_file_now. ``skip_commit=True`` on
+    # the request body short-circuits the auto-commit branch so a
+    # save-then-close-then-commit sequence isn't double-committed.
+    skip_commit = bool(body.get("skip_commit", False))
 
     from git_versioning import commit_file  # noqa: PLC0415
 
@@ -2574,7 +2580,8 @@ async def save_target_content(request: web.Request) -> web.Response:
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
         logger.info("Saved staged %s → %s (%d bytes)", filename, final_name, len(content))
-        await commit_file(Path(config_dir), final_name, "create", commit_message)
+        if not skip_commit:
+            await commit_file(Path(config_dir), final_name, "create", commit_message)
         return web.json_response({"ok": True, "renamed_to": final_name})
 
     try:
@@ -2585,7 +2592,8 @@ async def save_target_content(request: web.Request) -> web.Response:
     from scanner import _config_cache  # noqa: PLC0415
     _config_cache.pop(filename, None)
     logger.info("Saved %s (%d bytes)%s", filename, len(content), _who(request))
-    await commit_file(Path(config_dir), filename, "save", commit_message)
+    if not skip_commit:
+        await commit_file(Path(config_dir), filename, "save", commit_message)
     _broadcast_ws("targets_changed")
     return web.json_response({"ok": True})
 

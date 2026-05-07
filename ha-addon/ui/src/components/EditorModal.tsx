@@ -68,13 +68,13 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
   // #26: validation output shown inline below the editor.
   const [validateResult, setValidateResult] = useState<{ success: boolean; output: string } | null>(null);
   const [validating, setValidating] = useState(false);
-  // Bug #24 / #25: commit-message dialog. Opens when the user presses
-  // Save (auto-commit ON), Save & Upgrade (auto-commit ON), or Save
-  // and Commit (auto-commit OFF). The pending kind decides what
-  // happens after the save+commit succeeds.
+  // Bug #136 follow-up: commit-message dialog. Opens for Save & Close
+  // (when auto-commit is OFF) and for Save & Upgrade (when auto-commit
+  // is ON, mirroring the previous Save behaviour for the upgrade flow).
+  // Plain Save never opens it — Save no longer commits.
   const [commitMsg, setCommitMsg] = useState('');
   const [commitDialogKind, setCommitDialogKind] = useState<
-    null | 'save' | 'save-upgrade' | 'save-commit'
+    null | 'save-close' | 'save-upgrade'
   >(null);
   const [commitBusy, setCommitBusy] = useState(false);
 
@@ -220,23 +220,29 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     );
   }
 
-  // Bug #24 entry point for the "Save" button. Auto-commit ON: prompt
-  // for a commit message first, then run save+commit. Auto-commit OFF:
-  // just save (the explicit "Save and Commit" button handles the
-  // commit path for that case).
+  // Bug #136 follow-up — Save / Save & Close split.
+  // Save: never commits, never prompts, modal stays open. The user
+  // explicitly clicks Save & Close when they want a commit.
   // Bug #135: also invoked via the Monaco Ctrl+S command (see handleEditorDidMount).
   function onSaveClicked() {
-    if (autoCommit) {
-      setCommitMsg('');
-      setCommitDialogKind('save');
-    } else {
-      void handleSave();
-    }
+    void handleSave();
   }
 
   // Keep the ref in sync so the Monaco command always calls the current version.
   // Placed after the function definition so the ref update sees it immediately.
   onSaveClickedRef.current = onSaveClicked;
+
+  // Save & Close — always commits. When auto-commit is ON the commit
+  // is silent (default message); when OFF the dialog prompts so the
+  // user can type a subject. Either way, the modal closes after.
+  function onSaveAndCloseClicked() {
+    if (autoCommit) {
+      void handleSaveAndClose('');
+    } else {
+      setCommitMsg('');
+      setCommitDialogKind('save-close');
+    }
+  }
 
   function onSaveAndUpgradeClicked() {
     if (autoCommit) {
@@ -247,26 +253,46 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     }
   }
 
-  // Bug #25: only rendered when auto-commit is OFF — explicit manual
-  // commit path. Always opens the commit-message dialog.
-  function onSaveAndCommitClicked() {
-    setCommitMsg('');
-    setCommitDialogKind('save-commit');
-  }
-
-  // Bug #136: save no longer closes the modal — user closes explicitly via the
-  // Close button. handleSave stays open; Save & Upgrade and Save & Commit still
-  // call onClose() directly because those flows are inherently navigate-away.
-  async function handleSave(userMessage?: string) {
+  // Plain Save: write to disk, no commit, modal stays open.
+  async function handleSave() {
     if (!editorRef.current || !target) return false;
     const value = editorRef.current.getValue();
     try {
-      const { renamedTo } = await saveTargetContent(target, value, userMessage);
+      const { renamedTo } = await saveTargetContent(target, value, undefined, true);
       const finalTarget = renamedTo ?? target;
       savedContentRef.current = value;
       if (editorRef.current) updateDirtyDecorations(editorRef.current).catch(() => {});
       onToast('Saved ' + finalTarget, 'success');
       onSaved?.(target);
+      return true;
+    } catch (err) {
+      onToast('Save failed: ' + (err as Error).message, 'error');
+      return false;
+    }
+  }
+
+  // Save & Close: write to disk (skip implicit commit), then explicitly
+  // commit with the supplied message (or default when blank), then close.
+  async function handleSaveAndClose(userMessage: string) {
+    if (!editorRef.current || !target) return false;
+    const value = editorRef.current.getValue();
+    try {
+      const { renamedTo } = await saveTargetContent(target, value, undefined, true);
+      const finalTarget = renamedTo ?? target;
+      savedContentRef.current = value;
+      onSaved?.(target);
+      try {
+        const result = await commitFile(finalTarget, userMessage);
+        if (result.committed) {
+          onToast(`Committed ${finalTarget} (${result.short_hash})`, 'success');
+        } else {
+          onToast(`Saved ${finalTarget} (no changes to commit)`, 'info');
+        }
+      } catch (err) {
+        onToast('Commit failed: ' + (err as Error).message, 'error');
+        return false;
+      }
+      onClose();
       return true;
     } catch (err) {
       onToast('Save failed: ' + (err as Error).message, 'error');
@@ -292,48 +318,15 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     }
   }
 
-  // Bug #25: save (no server-side auto-commit because it's off) then
-  // call the explicit ``/files/{f}/commit`` endpoint with the user's
-  // message. Runs from the commit-message dialog's "Save and commit"
-  // button when auto-commit is off.
-  async function handleSaveAndCommit(userMessage: string) {
-    if (!editorRef.current || !target) return false;
-    const value = editorRef.current.getValue();
-    try {
-      const { renamedTo } = await saveTargetContent(target, value);
-      const finalTarget = renamedTo ?? target;
-      savedContentRef.current = value;
-      onSaved?.(target);
-      try {
-        const result = await commitFile(finalTarget, userMessage);
-        if (result.committed) {
-          onToast(`Committed ${finalTarget} (${result.short_hash})`, 'success');
-        } else {
-          onToast(`Saved ${finalTarget} (no changes to commit)`, 'info');
-        }
-      } catch (err) {
-        onToast('Commit failed: ' + (err as Error).message, 'error');
-        return false;
-      }
-      onClose();
-      return true;
-    } catch (err) {
-      onToast('Save failed: ' + (err as Error).message, 'error');
-      return false;
-    }
-  }
-
   async function confirmCommitDialog() {
     const kind = commitDialogKind;
     if (!kind) return;
     setCommitBusy(true);
     try {
-      if (kind === 'save') {
-        await handleSave(commitMsg);
+      if (kind === 'save-close') {
+        await handleSaveAndClose(commitMsg);
       } else if (kind === 'save-upgrade') {
         await handleSaveAndUpgrade(commitMsg);
-      } else if (kind === 'save-commit') {
-        await handleSaveAndCommit(commitMsg);
       }
     } finally {
       setCommitBusy(false);
@@ -353,17 +346,23 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
       <DialogContent className="dialog-xl" style={{ background: monacoTheme === 'vs' ? '#ffffff' : '#1e1e1e', border: monacoTheme === 'vs' ? '1px solid var(--border)' : '1px solid #3c3c3c' }}>
         <div className="editor-header">
           <h3>{(target || '').replace(/^\.pending\./, '')}</h3>
-          <Button size="sm" onClick={onSaveClicked}>Save</Button>
-          {!autoCommit && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={onSaveAndCommitClicked}
-              title="Save and create a git commit with a custom message. Auto-commit is off."
-            >
-              Save &amp; Commit
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={onSaveClicked}
+            title="Write to disk without a git commit. The modal stays open."
+          >
+            Save
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onSaveAndCloseClicked}
+            title={autoCommit
+              ? 'Save, commit (auto-message), then close.'
+              : 'Save, prompt for a commit message, commit, then close.'}
+          >
+            Save &amp; Close
+          </Button>
           {onCompile && target && target !== 'secrets.yaml' && (
             <Button
               variant="success"
@@ -407,7 +406,10 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
                 if (!editorRef.current || !target) return;
                 const value = editorRef.current.getValue();
                 try {
-                  await saveTargetContent(target, value);
+                  // Bug #136 follow-up: Validate is a checkpoint-style save —
+                  // skip the commit so it matches plain Save's "no commit
+                  // until the user clicks Save & Close" model.
+                  await saveTargetContent(target, value, undefined, true);
                   savedContentRef.current = value;
                   updateDirtyDecorations(editorRef.current).catch(() => {});
                 } catch (err) {
@@ -522,15 +524,13 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
               <DialogTitle>
                 {commitDialogKind === 'save-upgrade'
                   ? 'Commit message for save & upgrade'
-                  : commitDialogKind === 'save-commit'
-                    ? 'Commit message'
-                    : 'Commit message for save'}
+                  : 'Commit message for save & close'}
               </DialogTitle>
             </DialogHeader>
             <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
               <p className="text-sm text-[var(--text-muted)]">
-                {commitDialogKind === 'save-commit'
-                  ? 'Saving and creating a git commit for this file. Leave blank to use the default message.'
+                {commitDialogKind === 'save-close'
+                  ? 'Save, commit, and close. Leave blank to use the default message.'
                   : 'This save will create a git commit. Leave blank to use the default message.'}
               </p>
               <Input
@@ -569,9 +569,7 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
                   ? 'Saving…'
                   : commitDialogKind === 'save-upgrade'
                     ? 'Save, commit & upgrade'
-                    : commitDialogKind === 'save-commit'
-                      ? 'Save and commit'
-                      : 'Save and commit'}
+                    : 'Save, commit & close'}
               </Button>
             </DialogFooter>
           </DialogContent>
