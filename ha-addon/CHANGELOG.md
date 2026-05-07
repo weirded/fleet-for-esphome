@@ -6,6 +6,18 @@ A brand-refresh release.
 
 **Renamed to "Fleet for ESPHome"** (the add-on shipped as **ESPHome Fleet** in 1.5.0–1.7.0; before that **ESPHome Distributed Build Server**). The add-on store entry, sidebar tile, browser tab title, in-app wordmark, HA-integration display name, and the device-registry rows under Settings → Devices all flip to the new name on next deploy. The add-on slug, the integration domain, every `esphome_fleet.*` HA service, the GitHub repo, and the worker's Docker image names stay on their existing identifiers — nothing to migrate.
 
+**YAML editor — Ctrl+S now saves.** The browser's "Save As HTML" no longer hijacks Ctrl+S (Cmd+S on Mac) inside the editor. Save also no longer closes the modal — keep editing without re-opening, and click the new Close button (or Esc) when you're done. Matches the muscle memory most code-editor users bring from elsewhere.
+
+**Scheduler — remote workers no longer starve behind a fast local one.** With the local worker on 1 slot and remote workers idle, the scheduler used to defer every remote claim back to the local worker (because the local's "active" count momentarily dipped to 0 between jobs). The queue now claims onto remote workers as soon as it exceeds what the higher-priority pool can drain alone, so a 6-job queue across 1 local + 3 remote workers actually parallelises.
+
+**Worker registration — fresh workers no longer get stuck in 500 loops.** A freshly registered worker that hadn't reported a `perf_score` yet could trip a server-side `TypeError` on every job poll, returning HTTP 500 forever; the worker would never claim a job, never benchmark, and never recover. The scheduler is now defensive on missing/None perf data and falls through to "no job for you right now" on any unexpected eligibility-check error so a single bad worker can't lock itself out of the fleet.
+
+**Worker firmware archive — no more spurious "Failed" jobs after a successful flash.** A slow worker uploading both factory + ota variants of the compiled binary could race the server's job-timeout checker mid-upload; the server then refused both uploads with HTTP 409 and the UI flagged the job as failed even though the device was already flashed. The server now tolerates a brief grace window after a job finishes so the still-assigned worker's late variant uploads land cleanly.
+
+**Slow networks — pip install for ESPHome venvs is more patient.** The `pip install esphome==X.Y.Z` step that runs on first use of a new ESPHome version was timing out for some HAOS users on slower or remote networks. Bumped the timeout, added a single retry, and a failure now names the network/PyPI cause so it's distinguishable from a real compile error.
+
+**Install docs — HA Container / HA Core users now have a clearer path.** The README and add-on docs both spell out that the Add-on Store install path is HAOS / HA Supervised only, and point HA Container / HA Core users straight at the standalone Docker section.
+
 **Bug fixes (carried from earlier in the cycle).**
 
 - **#231** — The "Authentication Expired" repair flow, the initial config-flow copy, and the underlying error message used to point users to *Settings → Add-ons → ESPHome Fleet → Configuration* (the Supervisor add-on Configuration tab). The Server token actually lives in the add-on's own UI at **Settings → Authentication → Server token**. The four affected strings now match the visible UI labels.

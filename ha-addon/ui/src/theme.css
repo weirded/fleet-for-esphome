@@ -335,6 +335,9 @@ input[type="checkbox"] {
 .editor-header .modal-close:hover { color: #ccc; background: #3c3c3c; }
 .monaco-container { flex: 1; overflow: hidden; }
 .editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   padding: 4px 16px;
   font-size: 11px;
   color: #f59e0b;

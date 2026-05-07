@@ -105,6 +105,10 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
   useEffect(() => { onToastRef.current = onToast; }, [onToast]);
 
+  // Stable ref so the Monaco Ctrl+S command (registered once on mount) always
+  // calls the current save handler without capturing a stale closure.
+  const onSaveClickedRef = useRef<() => void>(() => {});
+
   // Load content when target changes — intentionally [target, reloadNonce]
   // only so that background polls refreshing the parent do NOT overwrite
   // unsaved edits. Bug #31: reloadNonce is bumped by the parent after a
@@ -204,20 +208,35 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     editor.onDidChangeModelContent(() => {
       updateDirtyDecorations(editor).catch(() => {});
     });
+
+    // Bug #135: intercept Ctrl+S / Cmd+S inside Monaco so the browser's
+    // "Save page as HTML" dialog never fires. KeyMod.CtrlCmd resolves to
+    // Cmd on Mac and Ctrl on Win/Linux — one registration covers both.
+    // The command reads from onSaveClickedRef so it always invokes the
+    // current save handler even though it was registered once at mount time.
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => { onSaveClickedRef.current(); },
+    );
   }
 
   // Bug #24 entry point for the "Save" button. Auto-commit ON: prompt
   // for a commit message first, then run save+commit. Auto-commit OFF:
   // just save (the explicit "Save and Commit" button handles the
   // commit path for that case).
+  // Bug #135: also invoked via the Monaco Ctrl+S command (see handleEditorDidMount).
   function onSaveClicked() {
     if (autoCommit) {
       setCommitMsg('');
       setCommitDialogKind('save');
     } else {
-      void handleSaveAndClose();
+      void handleSave();
     }
   }
+
+  // Keep the ref in sync so the Monaco command always calls the current version.
+  // Placed after the function definition so the ref update sees it immediately.
+  onSaveClickedRef.current = onSaveClicked;
 
   function onSaveAndUpgradeClicked() {
     if (autoCommit) {
@@ -235,7 +254,10 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     setCommitDialogKind('save-commit');
   }
 
-  async function handleSaveAndClose(userMessage?: string) {
+  // Bug #136: save no longer closes the modal — user closes explicitly via the
+  // Close button. handleSave stays open; Save & Upgrade and Save & Commit still
+  // call onClose() directly because those flows are inherently navigate-away.
+  async function handleSave(userMessage?: string) {
     if (!editorRef.current || !target) return false;
     const value = editorRef.current.getValue();
     try {
@@ -245,7 +267,6 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
       if (editorRef.current) updateDirtyDecorations(editorRef.current).catch(() => {});
       onToast('Saved ' + finalTarget, 'success');
       onSaved?.(target);
-      onClose();
       return true;
     } catch (err) {
       onToast('Save failed: ' + (err as Error).message, 'error');
@@ -308,7 +329,7 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
     setCommitBusy(true);
     try {
       if (kind === 'save') {
-        await handleSaveAndClose(commitMsg);
+        await handleSave(commitMsg);
       } else if (kind === 'save-upgrade') {
         await handleSaveAndUpgrade(commitMsg);
       } else if (kind === 'save-commit') {
@@ -457,11 +478,23 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
             <pre className="whitespace-pre-wrap break-words m-0" style={{ color: 'var(--text)' }}>{validateResult.output}</pre>
           </div>
         )}
-        {dirtyLineCount > 0 && !validateResult && (
-          <div className="editor-footer">
-            {dirtyLineCount} line{dirtyLineCount !== 1 ? 's' : ''} changed
-          </div>
-        )}
+        {/* Bug #136: footer is always rendered so Close is always reachable.
+            The dirty-line count is shown inline when there are changes. */}
+        <div className="editor-footer">
+          {dirtyLineCount > 0 && !validateResult && (
+            <span>{dirtyLineCount} line{dirtyLineCount !== 1 ? 's' : ''} changed</span>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (dirtyLineCount > 0) { setShowCloseConfirm(true); return; }
+              onClose();
+            }}
+          >
+            Close
+          </Button>
+        </div>
       </DialogContent>
       {showCloseConfirm && (
         <Dialog open onOpenChange={(open) => { if (!open) setShowCloseConfirm(false); }}>

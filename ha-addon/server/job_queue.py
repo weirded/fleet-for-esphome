@@ -1171,6 +1171,23 @@ class JobQueue:
             self._persist()
             return True
 
+    async def mark_firmware_stored_force(self, job_id: str) -> bool:
+        """Bug #236: flip ``has_firmware`` regardless of job state.
+
+        The API handler is responsible for the grace-window decision
+        (caller identity + finished_at recency); this helper just
+        records the disk write so the firmware-reconciler doesn't
+        garbage-collect a binary the user can still hand-flash.
+        Returns False only if the job vanished.
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return False
+            job.has_firmware = True
+            self._persist()
+            return True
+
     def active_job_ids(self) -> set[str]:
         """Snapshot of current job ids — used by firmware-storage reconciliation."""
         return set(self._jobs.keys())

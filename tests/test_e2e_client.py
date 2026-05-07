@@ -64,9 +64,13 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # suppress default access log noise
         pass
 
-    def _read_json(self) -> dict:
+    def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(length)) if length else {}
+        return self.rfile.read(length) if length else b""
+
+    def _read_json(self) -> dict:
+        raw = self._read_body()
+        return json.loads(raw) if raw else {}
 
     def _respond(self, status: int, body: dict | None = None) -> None:
         if status == 204:
@@ -81,8 +85,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_POST(self) -> None:
-        body = self._read_json()
         srv: FakeServer = self.server._fake  # type: ignore[attr-defined]
+
+        # Firmware upload: POST /api/v1/jobs/{id}/firmware/{variant}
+        # Body is raw bytes (application/octet-stream), not JSON.
+        parts = self.path.split("/")
+        if (
+            len(parts) >= 7
+            and parts[1] == "api" and parts[2] == "v1" and parts[3] == "jobs"
+            and parts[5] == "firmware"
+        ):
+            raw = self._read_body()
+            variant = parts[6] if len(parts) > 6 else "firmware"
+            with srv._seq_lock:
+                srv._call_sequence.append(("firmware", variant))
+                srv.firmware_calls.append({"variant": variant, "size": len(raw)})
+            self._respond(200, {"ok": True})
+            return
+
+        body = self._read_json()
 
         if self.path in ("/api/v1/clients/register", "/api/v1/workers/register"):
             srv.register_calls.append(body)
@@ -93,7 +114,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._respond(200, {"ok": True})
 
         elif self.path.startswith("/api/v1/jobs/") and self.path.endswith("/result"):
-            srv.result_calls.append(body)
+            with srv._seq_lock:
+                srv._call_sequence.append(("result", body.get("status", "?")))
+                srv.result_calls.append(body)
             self._respond(200, {"ok": True})
 
         elif self.path.startswith("/api/v1/jobs/") and self.path.endswith("/log"):
@@ -125,9 +148,14 @@ class FakeServer:
         self.register_calls: list[dict] = []
         self.heartbeat_calls: list[dict] = []
         self.result_calls: list[dict] = []
+        self.firmware_calls: list[dict] = []
+        # Ordered log of ("firmware", variant) / ("result", status) events.
+        # Used to assert that all firmware uploads land BEFORE submit_result.
+        self._call_sequence: list[tuple[str, str]] = []
         self.log_lines: list[str] = []
         self._jobs: list[dict] = []
         self._lock = threading.Lock()
+        self._seq_lock = threading.Lock()
 
         self._httpd = HTTPServer(("127.0.0.1", 0), _Handler)
         self._httpd._fake = self  # type: ignore[attr-defined]
@@ -211,6 +239,30 @@ def esphome_ota_fail(tmp_path) -> str:
         'if [ "$1" = "run" ]; then echo "INFO Successfully compiled program."; echo "ERROR: OTA failed"; exit 1; fi\n'
         'if [ "$1" = "upload" ]; then echo "ERROR: OTA failed"; exit 1; fi\n'
         'echo "fake esphome $*"; exit 0\n'
+    )
+    p.chmod(0o755)
+    return str(p)
+
+
+@pytest.fixture()
+def esphome_writes_firmware(tmp_path) -> str:
+    """Fake esphome: run succeeds and writes firmware binaries in ESPHome's
+    expected layout under cwd so _collect_firmware_variants finds them.
+
+    ESPHome writes to: .esphome/build/<device>/.pioenvs/<device>/firmware.bin
+    (and firmware.factory.bin for ESP32). We use device name "testdevice" and
+    produce both variants so the full upload path is exercised.
+    """
+    p = tmp_path / "esphome"
+    p.write_text(
+        '#!/bin/sh\n'
+        # Print the success marker ESPHome emits
+        'echo "INFO Successfully compiled program."\n'
+        # Create both firmware variants in the expected tree under cwd
+        'mkdir -p ".esphome/build/testdevice/.pioenvs/testdevice"\n'
+        'echo "FAKE_OTA_BIN" > ".esphome/build/testdevice/.pioenvs/testdevice/firmware.bin"\n'
+        'echo "FAKE_FACTORY_BIN" > ".esphome/build/testdevice/.pioenvs/testdevice/firmware.factory.bin"\n'
+        'exit 0\n'
     )
     p.chmod(0o755)
     return str(p)
@@ -390,6 +442,89 @@ class TestPollCycle:
             resp = client_mod.get("/api/v1/jobs/next")
 
         assert resp.status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# Bug #236 regression: firmware-variant uploads must arrive at the server
+# BEFORE submit_result(success) so the server's "job must be WORKING" gate
+# on the firmware-upload endpoint never fires with 409.
+# ---------------------------------------------------------------------------
+
+class TestFirmwareUploadOrdering:
+    """Regression for #236: firmware uploads race the job-success transition.
+
+    The server's /api/v1/jobs/{id}/firmware/{variant} endpoint enforces
+    job.state == WORKING; once submit_result transitions the job to SUCCESS
+    the endpoint returns 409 job_not_working.  Invariant: every firmware
+    upload must be recorded BEFORE the result submission in FakeServer's
+    call-sequence log.
+    """
+
+    def test_ota_success_uploads_firmware_before_submit_result(
+        self, fake_server, esphome_writes_firmware
+    ):
+        """OTA-success path: both firmware variants upload before submit_result."""
+        target = "living_room.yaml"
+        job = _make_job("job-236", target, _simple_bundle(target))
+
+        with _patched(fake_server):
+            client_mod.run_job(
+                fake_server.client_id, job,
+                FakeVersionManager(esphome_writes_firmware),
+            )
+
+        seq = fake_server._call_sequence
+        # At least one firmware upload must have been recorded.
+        firmware_events = [e for e in seq if e[0] == "firmware"]
+        result_events = [e for e in seq if e[0] == "result"]
+
+        assert firmware_events, "no firmware variant was uploaded to the server"
+        assert result_events, "no result was submitted"
+
+        # Every firmware upload must precede the first result submission.
+        first_result_idx = next(i for i, e in enumerate(seq) if e[0] == "result")
+        last_firmware_idx = max(i for i, e in enumerate(seq) if e[0] == "firmware")
+        assert last_firmware_idx < first_result_idx, (
+            f"firmware upload at seq[{last_firmware_idx}] came AFTER "
+            f"submit_result at seq[{first_result_idx}]; "
+            f"full sequence: {seq}"
+        )
+
+        # Both variants (ota + factory) should have been uploaded.
+        uploaded_variants = {e[1] for e in firmware_events}
+        assert "ota" in uploaded_variants, f"missing 'ota' variant; got {uploaded_variants}"
+        assert "factory" in uploaded_variants, f"missing 'factory' variant; got {uploaded_variants}"
+
+        # Job must still be reported as success.
+        assert result_events[0][1] == "success", f"expected success, got {result_events[0][1]}"
+
+    def test_download_only_uploads_firmware_before_submit_result(
+        self, fake_server, esphome_writes_firmware
+    ):
+        """Download-only path: firmware upload precedes submit_result."""
+        target = "sensor.yaml"
+        job = {**_make_job("job-236b", target, _simple_bundle(target)), "download_only": True}
+
+        with _patched(fake_server):
+            client_mod.run_job(
+                fake_server.client_id, job,
+                FakeVersionManager(esphome_writes_firmware),
+            )
+
+        seq = fake_server._call_sequence
+        firmware_events = [e for e in seq if e[0] == "firmware"]
+        result_events = [e for e in seq if e[0] == "result"]
+
+        assert firmware_events, "no firmware uploaded for download_only job"
+        assert result_events, "no result submitted for download_only job"
+
+        first_result_idx = next(i for i, e in enumerate(seq) if e[0] == "result")
+        last_firmware_idx = max(i for i, e in enumerate(seq) if e[0] == "firmware")
+        assert last_firmware_idx < first_result_idx, (
+            f"firmware upload at seq[{last_firmware_idx}] came AFTER "
+            f"submit_result at seq[{first_result_idx}]; full sequence: {seq}"
+        )
+        assert result_events[0][1] == "success"
 
 
 # ---------------------------------------------------------------------------

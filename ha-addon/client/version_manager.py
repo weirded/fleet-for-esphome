@@ -134,10 +134,19 @@ class VersionManager:
             if not self._evict_lru(keep_version=keep_version):
                 break
 
+    # Generous timeout for pip install on slow ARM hosts (HAOS, Raspberry Pi).
+    # PyPI downloads + sdist compiles (some ESPHome transitive deps lack ARM
+    # wheels and must be compiled from source) can legitimately take 3–5 min.
+    # Bug #127: default (None / unbounded) caused "uv installation via pip
+    # timed out" reports on HAOS 2026.4.4 — pip's own socket-level timeout is
+    # separate from this subprocess timeout, so this bounds the whole install.
+    _PIP_INSTALL_TIMEOUT = 300  # seconds
+
     def _install(self, version: str) -> None:
         """Create a venv and install esphome==version into it.
 
         Must NOT be called with self._lock held (long-running subprocess).
+        Retries once on timeout or network failure (#127).
         """
         venv_dir = self._venv_path(version)
         logger.info("Installing esphome==%s into %s", version, venv_dir)
@@ -155,27 +164,60 @@ class VersionManager:
             str(pip), "install", "--no-cache-dir", f"esphome=={version}",
         ]
 
-        logger.info("Running: %s", " ".join(install_cmd))
-        result = subprocess.run(
-            install_cmd,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
+        # Log the effective PyPI index so corporate-proxy / offline failures
+        # are debuggable from the log alone (#127).
+        index_url = os.environ.get("PIP_INDEX_URL", "https://pypi.org/simple/")
+
+        last_exc: Exception | None = None
+        for attempt in range(1, 3):  # attempts 1 and 2
+            logger.info(
+                "Running: %s  (index=%s, timeout=%ds, attempt=%d/2)",
+                " ".join(install_cmd), index_url, self._PIP_INSTALL_TIMEOUT, attempt,
+            )
+            try:
+                result = subprocess.run(
+                    install_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._PIP_INSTALL_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_exc = exc
+                logger.warning(
+                    "pip install esphome==%s timed out after %ds (attempt %d/2)",
+                    version, self._PIP_INSTALL_TIMEOUT, attempt,
+                )
+                if attempt < 2:
+                    logger.warning(
+                        "pip install retry 1/1 after %s: %s", type(exc).__name__, exc,
+                    )
+                continue
+
+            if result.returncode == 0:
+                logger.info("esphome==%s installed successfully", version)
+                return
+
             stderr_excerpt = (result.stderr or "")[-2000:]  # last 2000 chars
             stdout_excerpt = (result.stdout or "")[-1000:]
             logger.error(
-                "pip install esphome==%s failed (exit %d):\nstderr: %s\nstdout: %s",
-                version, result.returncode, stderr_excerpt, stdout_excerpt,
+                "pip install esphome==%s failed (exit %d, attempt %d/2):\nstderr: %s\nstdout: %s",
+                version, result.returncode, attempt, stderr_excerpt, stdout_excerpt,
             )
-            # Cleanup on failure
+            # Non-zero exit is a hard failure (bad version, bad index, etc.) —
+            # don't retry, it won't help.
             shutil.rmtree(str(venv_dir), ignore_errors=True)
             raise RuntimeError(
                 f"pip install esphome=={version} failed (exit {result.returncode}):\n"
                 f"{stderr_excerpt}"
             )
 
-        logger.info("esphome==%s installed successfully", version)
+        # Reached only after two consecutive timeouts.
+        shutil.rmtree(str(venv_dir), ignore_errors=True)
+        raise RuntimeError(
+            f"pip install esphome=={version} timed out after {self._PIP_INSTALL_TIMEOUT}s "
+            f"(network slow or PyPI unreachable). "
+            f"Retry the compile or check the worker host's network."
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Public API

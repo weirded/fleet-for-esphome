@@ -4,6 +4,8 @@
 
 > **Not an official ESPHome project.** Fleet for ESPHome is an independent, community-built tool that depends on [ESPHome](https://esphome.io) but is not part of the ESPHome project and is not maintained by the ESPHome team. "ESPHome" is a trademark of its respective owners; this project uses the name only to describe what it works with.
 
+> This file covers the **Home Assistant add-on** — available on HAOS and HA Supervised installs only. Running HA Container or HA Core? See [Standalone Docker installation](../README.md#as-a-standalone-docker-container) instead.
+
 A modern Home Assistant UI for ESPHome — works just as well for three devices as for a hundred. Git-backed config history with one-click rollback, a real device table, a live compile queue with searchable history, an inline YAML editor with autocomplete, per-device ESPHome version pinning, scheduled OTA upgrades, and optional distributed compilation when a slow HA host becomes the bottleneck.
 
 ## Getting Started

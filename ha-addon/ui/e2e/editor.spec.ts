@@ -47,7 +47,7 @@ test('editor modal has Save, Validate, and Save & Upgrade buttons', async ({ pag
   await expect(page.getByRole('button', { name: /^validate$/i })).toBeVisible();
 });
 
-test('clicking Save fires the save API and shows a toast', async ({ page }) => {
+test('clicking Save fires the save API, shows a toast, and keeps the modal open', async ({ page }) => {
   let saveHits = 0;
   let lastBody: { content?: string; commit_message?: string } | null = null;
   await page.route('**/ui/api/targets/*/content', async route => {
@@ -72,6 +72,48 @@ test('clicking Save fires the save API and shows a toast', async ({ page }) => {
 
   await expect.poll(() => saveHits).toBeGreaterThan(0);
   expect(lastBody?.commit_message).toBe('tidied wifi block');
+
+  // Bug #136: after save the modal must remain open — Close is now explicit.
+  await expect(page.locator('.monaco-editor').first()).toBeVisible();
+});
+
+test('Ctrl+S in the editor fires the save API (bug #135)', async ({ page }) => {
+  let saveHits = 0;
+  await page.route('**/ui/api/targets/*/content', async route => {
+    if (route.request().method() === 'POST') {
+      saveHits++;
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fallback();
+  });
+
+  await openEditor(page);
+  // Click inside the editor so Monaco has keyboard focus before Ctrl+S.
+  await page.locator('.monaco-editor').first().click();
+
+  // With auto-commit ON the commit-message dialog opens. Press Ctrl+S and
+  // confirm the dialog to complete the save flow.
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.press(`${modifier}+s`);
+
+  // Commit-message dialog should appear (same as clicking Save).
+  const commitDialog = page.getByRole('dialog').filter({ hasText: /commit message for save/i });
+  await expect(commitDialog).toBeVisible();
+  await commitDialog.getByRole('button', { name: /save and commit/i }).click();
+
+  await expect.poll(() => saveHits, { message: 'Ctrl+S should trigger the save API' }).toBeGreaterThan(0);
+
+  // Bug #136: modal stays open after Ctrl+S save.
+  await expect(page.locator('.monaco-editor').first()).toBeVisible();
+});
+
+test('Close button closes the modal when there are no unsaved changes', async ({ page }) => {
+  await openEditor(page);
+  // The Close button is always present in the footer (bug #136).
+  const closeBtn = page.getByRole('button', { name: /^close$/i });
+  await expect(closeBtn).toBeVisible();
+  await closeBtn.click();
+  await expect(page.locator('.monaco-editor').first()).not.toBeVisible({ timeout: 5000 });
 });
 
 test('clicking Validate saves, fires the validate API, and shows a toast', async ({ page }) => {
