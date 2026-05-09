@@ -1763,3 +1763,177 @@ esphome:
     out, ok = rename_device_in_yaml(src, "new-name")
     assert ok is False
     assert out == src  # untouched
+
+
+# ---------------------------------------------------------------------------
+# #131 — legacy bundle fallback for ESPHome <2026.4
+# ---------------------------------------------------------------------------
+
+def _build_legacy_fixture(tmp_path: Path) -> None:
+    """Lay out a minimal config dir matching the pre-1.6.2 shape."""
+    (tmp_path / "secrets.yaml").write_text(
+        'wifi_ssid: "ssid"\nwifi_password: "long-enough-password"\nota_password: "ota-password"\n'
+    )
+    (tmp_path / "device-a.yaml").write_text(
+        "esphome:\n  name: device-a\n"
+        "esp8266:\n  board: d1_mini\n"
+        "wifi:\n  ssid: !secret wifi_ssid\n  password: !secret wifi_password\n"
+    )
+    (tmp_path / "device-b.yaml").write_text(
+        "esphome:\n  name: device-b\n"
+        "esp8266:\n  board: d1_mini\n"
+    )
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "shared.yaml").write_text("logger:\n  level: DEBUG\n")
+    # Build-cache + git directories that must NOT ship.
+    (tmp_path / ".esphome").mkdir()
+    (tmp_path / ".esphome" / "stale.bin").write_bytes(b"\x00" * 16)
+    (tmp_path / ".pioenvs").mkdir()
+    (tmp_path / ".pioenvs" / "device-a").mkdir()
+    (tmp_path / ".pioenvs" / "device-a" / "stale.o").write_bytes(b"\x00" * 16)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+
+
+def test_legacy_bundle_ships_full_config_dir(tmp_path):
+    """Legacy path tars every YAML — including unrelated targets and
+    secrets — to match pre-1.6.2 behaviour. Trade-off documented; the
+    user pinning <2026.4 is opting into the wider bundle."""
+    from scanner import _create_legacy_bundle
+    _build_legacy_fixture(tmp_path)
+    raw = _create_legacy_bundle(str(tmp_path), "device-a.yaml")
+    names = _bundle_names(raw)
+    assert "device-a.yaml" in names
+    # Pre-1.6.2 ships everything — that's the trade-off documented in
+    # CHANGELOG / DOCS.
+    assert "device-b.yaml" in names
+    assert "packages/shared.yaml" in names
+    assert "secrets.yaml" in names
+
+
+def test_legacy_bundle_skips_build_caches_and_git(tmp_path):
+    """Legacy path still excludes the obvious caches — anything that's
+    machine-generated and would just bloat the tarball without helping
+    the worker compile."""
+    from scanner import _create_legacy_bundle
+    _build_legacy_fixture(tmp_path)
+    raw = _create_legacy_bundle(str(tmp_path), "device-a.yaml")
+    names = _bundle_names(raw)
+    for name in names:
+        parts = name.split("/")
+        assert ".esphome" not in parts, name
+        assert ".pioenvs" not in parts, name
+        assert ".pio" not in parts, name
+        assert ".git" not in parts, name
+        assert "__pycache__" not in parts, name
+
+
+def test_legacy_bundle_paths_are_relative(tmp_path):
+    from scanner import _create_legacy_bundle
+    _build_legacy_fixture(tmp_path)
+    raw = _create_legacy_bundle(str(tmp_path), "device-a.yaml")
+    for name in _bundle_names(raw):
+        assert not name.startswith("/"), name
+
+
+def test_legacy_bundle_raises_on_missing_target(tmp_path):
+    from scanner import _create_legacy_bundle
+    _build_legacy_fixture(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        _create_legacy_bundle(str(tmp_path), "ghost.yaml")
+
+
+def test_create_bundle_dispatches_legacy_when_server_predates_2026_4(tmp_path, monkeypatch):
+    """When the server's installed ESPHome reports a version below the
+    floor, ``create_bundle`` routes to ``_create_legacy_bundle``
+    instead of running the modern subprocess. Regression net for #131:
+    a future refactor that drops the dispatch must trip this test.
+    """
+    from scanner import create_bundle
+    import scanner as _scanner
+    _build_legacy_fixture(tmp_path)
+    # Make the modern path detect "old version".
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "2026.3.3")
+    # Nuke the modern subprocess hook so the test fails loudly if dispatch
+    # picks the wrong branch (no real ESPHome venv in the test env anyway).
+    def _explode(*a, **kw):
+        raise AssertionError("modern bundle path must not be taken for <2026.4")
+    monkeypatch.setattr(_scanner.subprocess, "run", _explode)
+
+    raw = create_bundle(str(tmp_path), "device-a.yaml")
+    names = _bundle_names(raw)
+    # Legacy bundle is the full config dir — secrets + unrelated targets in.
+    assert "device-a.yaml" in names
+    assert "device-b.yaml" in names
+    assert "secrets.yaml" in names
+
+
+def test_create_bundle_dispatches_modern_when_floor_or_above(tmp_path, monkeypatch):
+    """At 2026.4.0 (the floor) and above, dispatch goes to the modern
+    ConfigBundleCreator subprocess. Asserts via the absence of the
+    legacy "full-config-dir" markers — namely that ``device-b.yaml``
+    (unreferenced) is NOT in the bundle.
+    """
+    from scanner import create_bundle
+    _build_legacy_fixture(tmp_path)
+    raw = create_bundle(str(tmp_path), "device-a.yaml")
+    names = _bundle_names(raw)
+    assert "device-a.yaml" in names
+    assert "device-b.yaml" not in names  # modern path excludes unreferenced
+
+
+def test_supports_modern_bundle_below_floor(monkeypatch):
+    import scanner as _scanner
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "2026.3.3")
+    assert _scanner._supports_modern_bundle() is False
+
+
+def test_supports_modern_bundle_at_floor(monkeypatch):
+    import scanner as _scanner
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "2026.4.0")
+    assert _scanner._supports_modern_bundle() is True
+
+
+def test_supports_modern_bundle_above_floor(monkeypatch):
+    import scanner as _scanner
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "2026.5.1")
+    assert _scanner._supports_modern_bundle() is True
+
+
+def test_supports_modern_bundle_unknown_falls_through_to_modern(monkeypatch):
+    """Unknown / installing-state versions don't pre-emptively pick
+    the legacy path — better to surface a real error from the modern
+    subprocess than to ship secrets to every worker on a transient
+    parse glitch."""
+    import scanner as _scanner
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "unknown")
+    assert _scanner._supports_modern_bundle() is True
+    monkeypatch.setattr(_scanner, "_get_installed_esphome_version", lambda: "installing")
+    assert _scanner._supports_modern_bundle() is True
+
+
+def test_ensure_esphome_installed_no_longer_refuses_old_versions(monkeypatch):
+    """Pre-1.7.1 ``ensure_esphome_installed`` short-circuited with
+    ``_esphome_install_failed = True`` for any version below the floor.
+    #131 dropped that refusal: every version is installable; the
+    bundle dispatcher picks the legacy path at compile time. Regression
+    net: assert the function ATTEMPTS to install (gets past the floor
+    check) instead of bailing out at the top.
+    """
+    import scanner as _scanner
+    # Capture whether VersionManager was reached.
+    reached = {"vm": False}
+
+    class _StubVM:
+        def __init__(self, **kw): ...
+        def ensure_version(self, version: str) -> str:
+            reached["vm"] = True
+            raise RuntimeError("stub: VM not actually wired up in the test env")
+
+    # Stub out the VersionManager import so the test doesn't need the
+    # real client tree. The function should still REACH the install
+    # attempt — that's what we're asserting.
+    monkeypatch.setitem(sys.modules, "version_manager", type("M", (), {"VersionManager": _StubVM}))
+    _scanner._esphome_install_failed = False
+    _scanner.ensure_esphome_installed("2026.3.3", versions_base=Path("/tmp/test_esphome_versions"))
+    assert reached["vm"] is True, "ensure_esphome_installed bailed before reaching VersionManager"

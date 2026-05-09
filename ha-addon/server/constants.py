@@ -21,14 +21,16 @@ SECRETS_YAML = "secrets.yaml"
 # their image (e.g. adding a new system dep or Python library).
 MIN_IMAGE_VERSION = "8"
 
-# Minimum ESPHome version the server is willing to lazy-install into its
-# per-version venv (BD.2 — WORKITEMS-1.6.2). Landing below this floor is
-# refused with an explicit UI error rather than hanging on "installing…":
-# ``ConfigBundleCreator`` lives in ``esphome.bundle`` (landed ESPHome
-# 2026.4), and ``scanner.create_bundle`` delegates to it with no
-# fallback — older ESPHome versions cannot bundle and therefore cannot
-# dispatch jobs. The same guard applies to per-device ``pin_version``
-# so users can't downgrade past the floor via the Devices-tab pin UI.
+# Floor at which ``scanner.create_bundle`` switches between the
+# modern, scoped-bundle path and the legacy full-config-dir tar
+# (BD.2 / #131). ``ConfigBundleCreator`` lives in ``esphome.bundle``
+# (landed ESPHome 2026.4): ≥ this floor → modern path; < this floor →
+# legacy fallback. Pre-1.7.1 this was a hard install-time refusal,
+# which blocked legitimate use cases (#130 / #131 — pinning 2026.3.3
+# to dodge a 2026.4 YAML-parser regression, keeping older toolchains
+# around). The legacy path ships the entire config directory, so users
+# pinning below this floor lose bundle-scoping isolation; safe for
+# single-user fleets, documented in DOCS.md / CHANGELOG.
 MIN_ESPHOME_VERSION = "2026.4.0"
 
 # Worker disk-pressure self-pause thresholds (#219). When a worker's

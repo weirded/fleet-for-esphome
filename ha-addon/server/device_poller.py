@@ -291,20 +291,31 @@ class DevicePoller:
                     dev.running_version = txt_version
                 self._save_cache()
 
-            # Trigger an immediate API query for the full version.
-            # Prefer use_address from config over mDNS IP. The address override
-            # may be keyed under either the normalized or original name; check
-            # both. Use existing_key (the merged-into device) for the query so
-            # ping/API results land on the right Device row.
-            query_addr = (
-                self._address_overrides.get(existing_key)
-                or self._address_overrides.get(device_name)
-                or ip
+            # #238: only open an aioesphomeapi connection when we genuinely
+            # need to backfill information mDNS doesn't carry — the device's
+            # ``mac_address`` and ``compilation_time``. Once those are set,
+            # subsequent mDNS announces (every ~75 % of the TXT TTL, i.e.
+            # roughly once a minute under default ESPHome settings) update
+            # ``last_seen`` + ``running_version`` from the TXT record and do
+            # NOT spawn a fresh connection. The legacy "always poll" path
+            # is gated behind the ``device_native_api_poll`` setting (default
+            # False) for power users who explicitly want every-tick polling.
+            dev_now = self._devices.get(existing_key)
+            needs_backfill = (
+                dev_now is not None
+                and dev_now.compilation_time is None
+                and dev_now.mac_address is None
             )
-            if query_addr:
-                # C.8: create_task is the modern equivalent of ensure_future
-                # when we're scheduling a coroutine on the running loop.
-                asyncio.create_task(self._query_device(existing_key, query_addr))
+            if needs_backfill or self._legacy_native_poll():
+                query_addr = (
+                    self._address_overrides.get(existing_key)
+                    or self._address_overrides.get(device_name)
+                    or ip
+                )
+                if query_addr:
+                    # C.8: create_task is the modern equivalent of ensure_future
+                    # when we're scheduling a coroutine on the running loop.
+                    asyncio.create_task(self._query_device(existing_key, query_addr))
 
         except Exception:
             logger.exception("Error handling mDNS service change for %s", name)
@@ -394,21 +405,76 @@ class DevicePoller:
     # API polling
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _legacy_native_poll() -> bool:
+        """#238: read the ``device_native_api_poll`` opt-in.
+
+        Defaults to ``False`` — the device poller runs in mDNS-first mode
+        and skips the every-tick blanket API fan-out. ``True`` restores
+        the pre-1.7.1 behaviour where every device gets a fresh
+        ``aioesphomeapi`` connection on every ``device_poll_interval``
+        tick (and on every mDNS state change). Read fresh on every
+        decision so a Settings drawer flip takes effect without
+        restarting the poller.
+        """
+        try:
+            from settings import get_settings  # noqa: PLC0415
+            return bool(get_settings().device_native_api_poll)
+        except Exception:
+            return False
+
     async def _poll_loop(self) -> None:
-        """Periodically poll each known device via the native API."""
-        # Poll immediately on startup so cached devices (loaded from disk) get
-        # a live status check right away.  For fresh installs (empty cache) this
-        # is a no-op; mDNS will trigger _query_device as devices are discovered.
+        """Periodically reconcile known-device state.
+
+        #238: in steady state (``device_native_api_poll = False``,
+        the default), this loop does NOT open native-API connections to
+        devices on every tick. mDNS provides liveness + ``running_version``
+        via TXT records, and ``compilation_time`` / ``mac_address`` are
+        backfilled once on first sight (see ``_handle_service_change``).
+        The loop's remaining responsibilities are:
+
+          1. **Fallback poll for non-mDNS devices** — devices whose
+             ``last_seen`` is stale (older than 2 × poll interval) get a
+             single API connect attempt to confirm liveness. Covers
+             Ethernet boards, OpenThread devices, ``mdns: enabled: false``
+             configs, and devices on a network where the mDNS proxy is
+             flaky. Devices recently announced via mDNS are skipped.
+          2. **Stale → offline transition** — a device whose mDNS TTL
+             has elapsed AND whose API fallback failed flips to
+             ``online = False``.
+          3. **TTL purge** of stray mDNS-only neighbours.
+          4. **Settings refresh** so a Settings drawer change to
+             ``device_poll_interval`` takes effect on the next tick.
+
+        ``device_native_api_poll = True`` restores the pre-1.7.1
+        every-tick fan-out for users who want it.
+        """
         while self._running:
             async with self._lock:
                 snapshot = dict(self._devices)
 
-            # Query all devices concurrently for fast initial status
+            legacy = self._legacy_native_poll()
+            now = _utcnow()
+            mdns_trust_window = timedelta(seconds=2 * self._poll_interval)
+
             tasks = []
             for name, dev in snapshot.items():
                 addr = self._address_overrides.get(name) or dev.ip_address
-                if addr:
+                if not addr:
+                    continue
+                if legacy:
+                    # Pre-1.7.1 every-tick fan-out — opt-in.
                     tasks.append(self._query_device(name, addr))
+                    continue
+                # mDNS-first: only fall back to an API connect when we
+                # haven't heard from this device on mDNS in a while.
+                seen_recently = (
+                    dev.last_seen is not None
+                    and now - dev.last_seen <= mdns_trust_window
+                )
+                if seen_recently:
+                    continue
+                tasks.append(self._query_device(name, addr))
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -757,4 +823,43 @@ class DevicePoller:
             ip = self._address_overrides.get(name) or target_dev.ip_address
         # Run the query OUTSIDE the lock — it does network I/O.
         await self._query_device(name, ip)
+        return True
+
+    async def note_target_flashed(self, compile_target: str) -> bool:
+        """#238: stamp ``compilation_time`` server-side after a successful OTA.
+
+        The post-OTA flow used to rely on ``refresh_target`` opening an
+        ``aioesphomeapi`` connection to ask the device for the new
+        compilation_time. That still works, but we also know the
+        compilation moment authoritatively — the firmware *we just
+        flashed* was built moments ago — so write it server-side
+        immediately. The UI gets a fresh "Last compiled" timestamp
+        without depending on the device being reachable in the
+        few-second post-reboot window.
+
+        ``running_version`` is left to mDNS / refresh_target — we don't
+        always know exactly which ESPHome version compiled the firmware
+        without inspecting the bundle, and mDNS TXT updates within
+        seconds of the device coming back up.
+
+        Returns True if a Device row was found and stamped.
+        """
+        # ESPHome reports compilation_time as ISO+offset, e.g.
+        # "2026-04-23 06:13:56 -0700". Match that shape so
+        # _parse_device_compile_epoch in ui_api.py parses cleanly via
+        # the existing "%Y-%m-%d %H:%M:%S %z" format.
+        now = datetime.now().astimezone()
+        stamped = now.strftime("%Y-%m-%d %H:%M:%S %z")
+        async with self._lock:
+            target_dev: Optional[Device] = None
+            for dev in self._devices.values():
+                if dev.compile_target == compile_target:
+                    target_dev = dev
+                    break
+            if target_dev is None:
+                return False
+            target_dev.compilation_time = stamped
+            target_dev.last_seen = _utcnow()
+            target_dev.online = True
+            self._save_cache()
         return True

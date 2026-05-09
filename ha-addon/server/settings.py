@@ -143,6 +143,18 @@ class AppSettings:
     worker_offline_threshold: int = 30
     # Seconds between ESPHome-device API polls (online / running version).
     device_poll_interval: int = 60
+    # #238: when False (default), the device poller trusts mDNS for liveness +
+    # ``running_version`` and only opens an ``aioesphomeapi`` connection on
+    # first sight (to backfill ``mac_address`` + ``compilation_time``), as a
+    # fallback for devices the mDNS browser hasn't seen recently (Ethernet,
+    # OpenThread, ``mdns: enabled: false``), or via the post-OTA refresh hook.
+    # When True, every tick fans out an API query to every known device — the
+    # pre-1.7.1 behaviour. Reported by pricklyguy in #143: the every-60-s
+    # blanket query churned the device's ``api.connection`` log, fired
+    # ``on_connect:`` automations, and pressured ``reboot_timeout`` on devices
+    # whose HA persistent connection competed for the same client slot. Power
+    # users diagnosing a flaky device can flip this back on transiently.
+    device_native_api_poll: bool = False
     # When true, direct-port access on :8765 (outside Ingress) requires
     # a valid HA Bearer or the add-on's own server token. The dataclass
     # default is ``False`` so standalone Docker installs (no Supervisor →
@@ -309,6 +321,7 @@ _VALIDATORS: dict[str, Callable[[Any, str], Any]] = {
     "worker_offline_threshold": _validate_int_range(15, 3600),
     # Device poll: 10s floor (below that we hammer devices), 1h ceiling.
     "device_poll_interval": _validate_int_range(10, 3600),
+    "device_native_api_poll": _validate_bool,
     "require_ha_auth": _validate_bool,
     # #82: enum validator — 'auto' / '12h' / '24h'. See AppSettings.time_format.
     "time_format": _validate_enum("auto", "12h", "24h"),

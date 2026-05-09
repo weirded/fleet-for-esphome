@@ -34,10 +34,12 @@ rules:
   brands:
     status: todo
     comment: >
-      Artwork staged under `docs/brands-submission/` at 256×256 /
-      512×512 / landscape sizes; submission to `home-assistant/brands`
-      is tracked as PR.5 in WORKITEMS-1.6.1.md. Until that PR merges,
-      HA renders the integration with the bundled local icon/logo.
+      Local brand images live in `brand/` per the HA 2026.3 brands
+      proxy API — HA ≥2026.3 reads these directly and skips the CDN.
+      Brands-repo PR (icons only — wordmark logo violates the "shortest
+      side ≥128 / ≥256" rule and will follow once redesigned vertically)
+      open at https://github.com/home-assistant/brands/pull/10279.
+      Status flips to `done` when that PR merges.
 
   common-modules:
     status: done

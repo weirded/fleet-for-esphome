@@ -605,14 +605,20 @@ async def submit_job_result(request: web.Request) -> web.Response:
     if not ok:
         return _protocol_error("job_not_found_or_wrong_state", status=404)
 
-    # #11: trigger an immediate device-info refresh after a successful OTA so
-    # the UI sees the new running_version + compilation_time within ~1s
-    # instead of waiting up to one device_poller cycle (default 60s). Skip on
-    # failures and on validate-only jobs (which don't change the device).
+    # #11: push fresh ``running_version`` + ``compilation_time`` into the UI
+    # within ~1s after a successful OTA instead of waiting up to one
+    # device_poller cycle. Skip on failures and on validate-only jobs.
+    # #238: stamp ``compilation_time`` server-side immediately (the firmware
+    # we just flashed was compiled moments ago, so server-time is correct
+    # within a few seconds), then ALSO fire ``refresh_target`` async to pick
+    # up the device-reported ``running_version`` once it's back on the
+    # network. The synchronous stamp means the UI updates instantly even
+    # when the device is mid-reboot and the API connect is going to fail.
     if msg.status == "success" and msg.ota_result == "success" and job is not None:
         device_poller = request.app.get("device_poller")
         if device_poller is not None:
             try:
+                await device_poller.note_target_flashed(job.target)
                 # Don't block the response on the device-info round-trip;
                 # fire-and-forget on the event loop.
                 asyncio.create_task(device_poller.refresh_target(job.target))
