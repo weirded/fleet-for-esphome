@@ -308,8 +308,8 @@ class DevicePoller:
             )
             if needs_backfill or self._legacy_native_poll():
                 query_addr = (
-                    self._address_overrides.get(existing_key)
-                    or self._address_overrides.get(device_name)
+                    self._address_override_for(existing_key)
+                    or self._address_override_for(device_name)
                     or ip
                 )
                 if query_addr:
@@ -459,7 +459,7 @@ class DevicePoller:
 
             tasks = []
             for name, dev in snapshot.items():
-                addr = self._address_overrides.get(name) or dev.ip_address
+                addr = self._address_override_for(name) or dev.ip_address
                 if not addr:
                     continue
                 if legacy:
@@ -728,10 +728,37 @@ class DevicePoller:
         """
         return name.replace("-", "_")
 
+    def _address_override_for(self, device_name: str) -> Optional[str]:
+        """Bug #134: hyphen/underscore-tolerant lookup against
+        ``_address_overrides``.
+
+        ``build_name_to_target_map`` keys the override by the YAML's
+        ``esphome.name`` (typically with hyphens). mDNS announces a
+        normalized form (hyphens → underscores). If a device row
+        ended up keyed under the mDNS-normalized form before the
+        proactive-creation pass ran, ``_address_overrides.get(dev.name)``
+        would miss and consumers would fall back to ``dev.ip_address``
+        (often a stale ``{name}.local`` from the early-boot fallback).
+
+        Mirrors the normalization already in
+        :meth:`_find_existing_device_key` and the encryption-key
+        mirroring in :func:`scanner.build_name_to_target_map`.
+        """
+        if not device_name:
+            return None
+        override = self._address_overrides.get(device_name)
+        if override is not None:
+            return override
+        norm = self._normalize(device_name)
+        for key, value in self._address_overrides.items():
+            if self._normalize(key) == norm:
+                return value
+        return None
+
     def resolve_ota_address(self, device_name: str) -> Optional[str]:
-        """Bug #18 (1.6.1): best available address for OTA + native-API
-        calls, consolidating the ``_address_overrides.get(name) or
-        dev.ip_address`` pattern that was copy-pasted across main.py,
+        """Bug #18 (1.6.1) + #134 (1.7.2): best available address for OTA +
+        native-API calls, consolidating the ``_address_overrides.get(name)
+        or dev.ip_address`` pattern that was copy-pasted across main.py,
         scheduler.py, and ui_api.py.
 
         Precedence, strongest-signal first:
@@ -740,10 +767,12 @@ class DevicePoller:
            (user put a ``use_address`` / ``manual_ip.static_ip`` in
            the YAML — authoritative, always wins).
         2. ``dev.ip_address`` when it's a real IP (mDNS-resolved).
-        3. ``_address_overrides[name]`` even if it's a ``.local``
-           hostname — used to be the primary path, still a better
-           answer than nothing on a LAN where mDNS proxies work.
-        4. ``None`` — let the worker fall back to ESPHome's ``--device
+        3. ``_address_overrides[name]`` even if it's a ``.local`` or
+           FQDN hostname — used to be the primary path, still a
+           better answer than nothing on a LAN where mDNS proxies
+           or corporate DNS resolves the name (bug #134).
+        4. ``dev.ip_address`` as a last resort (``.local`` fallback).
+        5. ``None`` — let the worker fall back to ESPHome's ``--device
            OTA`` sentinel so ESPHome's own resolver runs.
 
         The bug (radiowave911 at issue #60) was that (1) fell through
@@ -752,6 +781,9 @@ class DevicePoller:
         override-takes-precedence shape then hid the real IP that
         mDNS had since discovered. With this helper, a real IP from
         mDNS beats a stale ``.local`` override every time.
+
+        Logs the resolution at INFO so a future bug report has the
+        full waterfall in the add-on log (DL.* discipline, #60).
         """
         dev = self._devices.get(device_name)
         if dev is None:
@@ -762,18 +794,33 @@ class DevicePoller:
                      if d.compile_target == mapped_target),
                     None,
                 )
-        override = self._address_overrides.get(device_name)
+        override = self._address_override_for(device_name)
         dev_ip = dev.ip_address if dev else None
         # Real IP in the override (static_ip / use_address) wins first.
         if override and _is_ip_literal(override):
-            return override
+            resolved = override
+            branch = "override_ip_literal"
         # mDNS-resolved real IP is next.
-        if dev_ip and _is_ip_literal(dev_ip):
-            return dev_ip
-        # Fall back to whatever override we have — probably a `.local`
-        # hostname — which is still better than ``None`` when the
-        # worker's network can resolve it.
-        return override or dev_ip or None
+        elif dev_ip and _is_ip_literal(dev_ip):
+            resolved = dev_ip
+            branch = "dev_ip_literal"
+        # Override hostname (use_address FQDN, .local fallback) over
+        # dev.ip_address (often a stale .local). Bug #134: corporate
+        # FQDNs in use_address must win over the .local fallback.
+        elif override:
+            resolved = override
+            branch = "override_hostname"
+        elif dev_ip:
+            resolved = dev_ip
+            branch = "dev_ip_hostname"
+        else:
+            resolved = None
+            branch = "none"
+        logger.debug(
+            "resolve_ota_address(%r): override=%r dev_ip=%r → %r (branch=%s)",
+            device_name, override, dev_ip, resolved, branch,
+        )
+        return resolved
 
     def _map_target(self, device_name: str) -> Optional[str]:
         """Return the YAML filename matching *device_name*, or None.
@@ -820,7 +867,7 @@ class DevicePoller:
             if target_dev is None or not target_dev.ip_address:
                 return False
             name = target_dev.name
-            ip = self._address_overrides.get(name) or target_dev.ip_address
+            ip = self._address_override_for(name) or target_dev.ip_address
         # Run the query OUTSIDE the lock — it does network I/O.
         await self._query_device(name, ip)
         return True

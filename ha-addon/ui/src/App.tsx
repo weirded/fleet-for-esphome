@@ -259,6 +259,15 @@ export default function App() {
       void i18n.changeLanguage(resolved);
     }
   }, [appSettings?.language]);
+  // #145: stamp data-font-size on <html> so the CSS in index.css can
+  // pick up the override and scale the Tailwind type ramp. 'normal' is
+  // the default; we still set the attribute explicitly so the CSS
+  // selector matches and a future stylesheet diff is auditable.
+  useEffect(() => {
+    const root = document.documentElement;
+    const size = appSettings?.font_size ?? 'normal';
+    root.setAttribute('data-font-size', size);
+  }, [appSettings?.font_size]);
   // Poll at 1 Hz for live-feeling updates. Workers + queue are pure in-memory
   // reads. Targets/devices does a readdir + per-target stat() for mtime cache
   // checks (metadata resolution is cached and only re-fires when a file

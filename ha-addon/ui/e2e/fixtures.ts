@@ -630,6 +630,10 @@ export async function mockApi(page: Page) {
     // navigator.language; the Settings drawer renders an EnumRow
     // wired against this field.
     language: 'auto',
+    // #145: font-size scale picker. ``'normal'`` is byte-identical
+    // to pre-#145; the EnumRow under Display lets the user pick
+    // Small/Normal/Large.
+    font_size: 'normal',
   };
   await page.route('**/ui/api/settings', async (route) => {
     const method = route.request().method();

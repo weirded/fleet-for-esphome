@@ -189,6 +189,30 @@ async def test_language_defaults_to_auto(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #145 — font_size enum
+# ---------------------------------------------------------------------------
+
+
+async def test_update_settings_accepts_font_size_values(tmp_path):
+    init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    for val in ("small", "normal", "large"):
+        updated = await update_settings({"font_size": val})
+        assert updated.font_size == val
+
+
+async def test_update_settings_rejects_unknown_font_size(tmp_path):
+    init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    with pytest.raises(SettingsValidationError) as exc:
+        await update_settings({"font_size": "huge"})
+    assert exc.value.field == "font_size"
+
+
+async def test_font_size_defaults_to_normal(tmp_path):
+    s = init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    assert s.font_size == "normal"
+
+
+# ---------------------------------------------------------------------------
 # #98 — versioning_enabled tristate + legacy bool migration
 # ---------------------------------------------------------------------------
 
@@ -593,6 +617,7 @@ def test_init_creates_settings_file_when_absent(tmp_path: Path):
         "time_format": "auto",
         "date_format": "auto",
         "language": "auto",
+        "font_size": "normal",
         "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
     }
     # Everything else matches the dataclass defaults.
@@ -867,6 +892,7 @@ def test_settings_as_dict_round_trips():
         "time_format": "auto",
         "date_format": "auto",
         "language": "auto",
+        "font_size": "normal",
         "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
     }
 

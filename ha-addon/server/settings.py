@@ -190,6 +190,16 @@ class AppSettings:
     # below has to enumerate it.
     language: str = "auto"
 
+    # #145: UI font-size scale. ``'normal'`` = today's sizing (default,
+    # byte-identical render to pre-#145); ``'small'`` shrinks the whole UI
+    # proportionally for users running HA at a Brave/Firefox/Edge zoom
+    # below 100 % (Wolfgang-TH runs Brave at 80 % to match HA); ``'large'``
+    # is the accessibility step up. Wired through App.tsx by setting
+    # ``data-font-size`` on the root element; CSS in index.css picks up
+    # ``html[data-font-size="small"]`` etc. and shifts the Tailwind base
+    # font-size variable.
+    font_size: str = "normal"
+
     # DQ.1: fleet-wide default per-worker disk quota for the
     # ``/esphome-versions/`` tree (venvs + per-target caches + per-slot
     # working dirs + pio-slot toolchains). Pushed to every worker on every
@@ -339,6 +349,8 @@ _VALIDATORS: dict[str, Callable[[Any, str], Any]] = {
     "date_format": _validate_enum("auto", "iso", "us", "eu", "long"),
     # I18N.2 (#141): UI locale — 'auto' (browser) / 'en' / 'de'.
     "language": _validate_enum("auto", "en", "de"),
+    # #145: font-size scale — 'small' / 'normal' (default) / 'large'.
+    "font_size": _validate_enum("small", "normal", "large"),
     # DQ.1: ≥1 GiB floor stops a typo from starving every worker into
     # constant eviction; 1 TiB ceiling matches firmware_cache_max_gb's
     # upper bound (anything bigger is misconfiguration). Also pinned to

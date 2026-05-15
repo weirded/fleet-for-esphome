@@ -299,6 +299,11 @@ export interface AppSettings {
   // catalog in src/i18n/locales/, (b) adding it here, and (c) listing
   // it in `_validate_enum` on the server.
   language: 'auto' | 'en' | 'de';
+  // #145 — UI font-size scale. 'normal' = today's sizing (byte-identical
+  // render to pre-#145). 'small' / 'large' shift the root font-size so
+  // Tailwind's whole type ramp scales proportionally; persisted via
+  // [data-font-size] attribute on <html>, applied at App.tsx mount.
+  font_size: 'small' | 'normal' | 'large';
 }
 
 export async function getSettings(): Promise<AppSettings> {

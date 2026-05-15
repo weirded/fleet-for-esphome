@@ -103,3 +103,63 @@ def test_resolve_handles_missing_device() -> None:
     p._address_overrides = {}
 
     assert p.resolve_ota_address("nonexistent") is None
+
+
+def test_resolve_prefers_use_address_fqdn_over_dev_ip() -> None:
+    """Bug #134 (1.7.2, robin-thoni): wifi.use_address holds a
+    non-``.local`` FQDN routed via corporate DNS. dev.ip_address
+    has the same FQDN (proactive creation never got an mDNS IP
+    because the device isn't on the local segment). Live Logs +
+    the worker were falling back to ``{name}.local`` instead of
+    honouring the override."""
+    p = _build_poller()
+    p._devices = {
+        "esp19-btpresence": Device(
+            name="esp19-btpresence",
+            ip_address="esp19-btpresence.example.com",
+            address_source="wifi_use_address",
+        ),
+    }
+    p._address_overrides = {"esp19-btpresence": "esp19-btpresence.example.com"}
+    p._address_sources = {"esp19-btpresence": "wifi_use_address"}
+
+    assert p.resolve_ota_address("esp19-btpresence") == "esp19-btpresence.example.com"
+
+
+def test_resolve_handles_hyphen_underscore_key_mismatch() -> None:
+    """Bug #134: if the device row ended up keyed under the
+    mDNS-normalized (underscore) form before the proactive YAML
+    pass ran, a hyphenated _address_overrides key would miss
+    on ``get(dev.name)``. Normalized lookup matches them."""
+    p = _build_poller()
+    # Device keyed with underscores (as if mDNS announced first).
+    p._devices = {
+        "esp19_btpresence": Device(
+            name="esp19_btpresence",
+            ip_address="esp19_btpresence.local",
+            address_source="mdns",
+        ),
+    }
+    # YAML-derived override keyed with hyphens.
+    p._address_overrides = {"esp19-btpresence": "esp19-btpresence.example.com"}
+    p._address_sources = {"esp19-btpresence": "wifi_use_address"}
+
+    # Caller passes the underscore form (dev.name) — normalized lookup
+    # must find the hyphenated override.
+    assert (
+        p.resolve_ota_address("esp19_btpresence")
+        == "esp19-btpresence.example.com"
+    )
+
+
+def test_address_override_for_normalized_lookup() -> None:
+    """Direct coverage of the private helper used by resolve_ota_address
+    and the in-poller fan-out — confirms both spellings resolve to the
+    same value without doubling the dict size at the source."""
+    p = _build_poller()
+    p._address_overrides = {"my-device": "device.example.com"}
+
+    assert p._address_override_for("my-device") == "device.example.com"
+    assert p._address_override_for("my_device") == "device.example.com"
+    assert p._address_override_for("unknown") is None
+    assert p._address_override_for("") is None

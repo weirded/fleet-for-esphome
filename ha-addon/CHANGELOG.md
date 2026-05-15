@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.7.2 (unreleased — dev only)
+
+**Settings → Display → Font size.** New three-way picker (Small / Normal / Large) that scales the whole UI proportionally — tables, buttons, dialogs, and modals shrink or grow together rather than just body copy. Useful if you run Home Assistant at a non-100 % browser zoom and find Fleet's secondary text too small. Default stays at Normal so existing installs render byte-identical to 1.7.1.
+
+**Per-worker "Working" sensor.** Every build worker now exposes a `binary_sensor.fleet_<worker>_working` entity in Home Assistant alongside the existing `_online` sensor. The entity flips on while the worker has a compile in flight, so you can write automations like "stop the VSCode add-on while any worker is busy" — exposed as the building block rather than hard-coding any specific stop/start action. Generalises beyond VSCode to Frigate, NodeRED, AdGuard, or a dashboard warning card; mirrors HA's `BinarySensorDeviceClass.RUNNING` for the right icon and label.
+
+**Version dropdown — "Installable only" filter.** Both the header version dropdown and the Upgrade modal's version picker now offer a third filter alongside Show betas: **Installable only** (default ON) hides ESPHome versions older than 2023.7.0 — the floor below which `pip install esphome==X` is likely to fail on the current Python runtime. Untick to see the full PyPI catalogue. Pairs with 1.7.1's compile-with-old-versions fix.
+
+**Bug fixes.**
+
+- **#134** — `wifi.use_address` set to a non-`.local` FQDN (e.g. a corporate-DNS hostname for a VPN'd device) was honoured by the Devices tab and the OTA network-diagnostics dump, but Live Logs and the OTA upload itself silently fell back to `<name>.local` and failed to connect. All four code paths now go through the same address-resolution helper with hyphen/underscore-tolerant lookup, so a YAML `wifi.use_address` is honoured everywhere.
+
+**For integrators.**
+
+- **#168 — KEDA-compatible queue-depth metric.** New `GET /api/v1/metrics/queue` returns `{pending, working, active, online_workers, max_parallel_capacity, schema_version}` for external autoscalers (KEDA's `metrics-api` scaler, k8s HPA, Sablier, the in-tree Proxmox scaler). Bearer-auth via the existing `/api/v1/*` middleware — same worker token, read-only metric. Lets you spin workers up only when there's pending compile work and shut them down when idle.
+
 ## 1.7.1
 
 A brand-refresh release.

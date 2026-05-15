@@ -126,6 +126,9 @@ CONTRACTS: list[tuple[str, Any, Any, set[str]]] = [
             # 1.7.2 I18N.2 (#141): UI locale selector — same drawer
             # field-state contract.
             "language",
+            # 1.7.2 #145: font-size scale picker — same drawer field-state
+            # contract; UI applies via data-font-size on <html>.
+            "font_size",
         },
     ),
     # Targets — Devices tab, integration's device builder, and every

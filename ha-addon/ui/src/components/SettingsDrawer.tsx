@@ -253,6 +253,20 @@ export function SettingsDrawer({ open, onOpenChange, dirtyTargets = [], onReques
                   ]}
                   onCommit={v => patch({ language: v as 'auto' | 'en' | 'de' })}
                 />
+                {/* #145 — font size scale. 'normal' is byte-identical to
+                    pre-#145; 'small' fits the UI to a sub-100 % browser
+                    zoom; 'large' is the accessibility step up. */}
+                <EnumRow
+                  label="Font size"
+                  help="Scales the whole UI proportionally. Pick Small if you run Home Assistant at a lower browser zoom."
+                  value={data.font_size}
+                  options={[
+                    { value: 'small', label: 'Small' },
+                    { value: 'normal', label: 'Normal' },
+                    { value: 'large', label: 'Large' },
+                  ]}
+                  onCommit={v => patch({ font_size: v as 'small' | 'normal' | 'large' })}
+                />
               </Section>
               </>}
               {activeTab === 'advanced' && <>

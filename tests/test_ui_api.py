@@ -953,6 +953,44 @@ async def test_workers_lists_registered(tmp_path):
         assert len(data) == 2
         hostnames = {w["hostname"] for w in data}
         assert hostnames == {"worker-1", "worker-2"}
+        # #151: every worker row carries the active_job_count / is_working
+        # fields the HA WorkerWorkingBinarySensor reads off — zero baseline.
+        for row in data:
+            assert row["active_job_count"] == 0
+            assert row["is_working"] is False
+    finally:
+        await ta.close()
+
+
+async def test_workers_exposes_active_job_count_and_is_working(tmp_path):
+    """#151 (KriVaTri): a worker with a WORKING job assigned reports
+    ``active_job_count == 1`` and ``is_working is True`` so the HA
+    integration's WorkerWorkingBinarySensor flips on without an extra
+    server round-trip. Workers that are idle remain ``is_working False``
+    even if some other worker is busy."""
+    from job_queue import JobState  # noqa: PLC0415
+
+    ta = await _make_ui_app(tmp_path)
+    try:
+        busy_id = ta.registry.register("busy", "linux/amd64", image_version="4")
+        ta.registry.register("idle", "linux/amd64", image_version="4")
+
+        job = await ta.queue.enqueue(
+            target="device.yaml",
+            esphome_version="2024.3.1",
+            run_id="run-1",
+            timeout_seconds=300,
+        )
+        job.state = JobState.WORKING
+        job.assigned_client_id = busy_id
+
+        resp = await ta.get("/ui/api/workers")
+        assert resp.status == 200
+        rows = {w["hostname"]: w for w in await resp.json()}
+        assert rows["busy"]["active_job_count"] == 1
+        assert rows["busy"]["is_working"] is True
+        assert rows["idle"]["active_job_count"] == 0
+        assert rows["idle"]["is_working"] is False
     finally:
         await ta.close()
 
@@ -1480,6 +1518,7 @@ async def test_get_settings_returns_defaults_on_fresh_boot(tmp_path, _settings_i
             "time_format": "auto",
             "date_format": "auto",
             "language": "auto",
+            "font_size": "normal",
             "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
             "device_native_api_poll": False,
         }

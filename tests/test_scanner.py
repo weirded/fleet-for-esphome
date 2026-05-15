@@ -916,6 +916,18 @@ def test_get_device_address_wifi_use_address():
     assert get_device_address(config, "dev") == ("192.168.1.42", "wifi_use_address")
 
 
+def test_get_device_address_wifi_use_address_fqdn():
+    """Bug #134 (1.7.2, robin-thoni): a non-``.local`` FQDN routed via
+    corporate DNS must round-trip through the scanner verbatim so the
+    OTA invocation, Live Logs WS, and the device-row IP cell all agree
+    on the same address."""
+    config = {"wifi": {"use_address": "esp19-btpresence.example.com"}}
+    assert get_device_address(config, "esp19-btpresence") == (
+        "esp19-btpresence.example.com",
+        "wifi_use_address",
+    )
+
+
 def test_get_device_address_wifi_static_ip():
     config = {"wifi": {"manual_ip": {"static_ip": "10.0.0.5"}}}
     assert get_device_address(config, "dev") == ("10.0.0.5", "wifi_static_ip")

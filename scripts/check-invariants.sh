@@ -391,8 +391,7 @@ fi
 # live label.
 #
 # Allowlisted because the old literal is intentional there:
-#   - dev-plans/archive/             (frozen historical plans)
-#   - dev-plans/WORKITEMS-1.7.1.md   (the rebrand plan itself)
+#   - dev-plans/archive/             (frozen historical plans, including the 1.7.1 rebrand plan)
 #   - ha-addon/CHANGELOG.md          (entries describing past releases)
 #   - any line containing the marker "br1-allow: <reason>" (per-line opt-out)
 #
@@ -405,7 +404,6 @@ fi
 rule_count=$((rule_count + 1))
 br1_hits=$(git ls-files \
     | grep -vE '^dev-plans/archive/' \
-    | grep -vE '^dev-plans/WORKITEMS-1\.7\.1\.md$' \
     | grep -vE '^ha-addon/CHANGELOG\.md$' \
     | grep -vE '^scripts/check-invariants\.sh$' \
     | xargs grep -nHI 'ESPHome Fleet' 2>/dev/null \
