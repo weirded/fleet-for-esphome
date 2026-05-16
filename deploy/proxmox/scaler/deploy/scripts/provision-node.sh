@@ -148,7 +148,7 @@ for vmid in $POOL_VMIDS; do
     set -e
     cat >/etc/systemd/system/esphome-fleet-worker.service <<UNIT
 [Unit]
-Description=ESPHome Fleet build worker
+Description=Fleet for ESPHome build worker
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target

@@ -43,7 +43,7 @@ jobs:
         run: helm lint deploy/kubernetes/ -f deploy/kubernetes/ci/values-minimal.yaml
 
       - name: Install helm-unittest plugin
-        run: helm plugin install --verify=false https://github.com/helm-unittest/helm-unittest --version v0.7.4
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.7.4
 
       - name: helm unittest
         run: helm unittest deploy/kubernetes/

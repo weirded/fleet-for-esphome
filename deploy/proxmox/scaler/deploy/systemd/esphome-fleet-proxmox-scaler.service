@@ -1,5 +1,5 @@
 [Unit]
-Description=ESPHome Fleet Proxmox LXC autoscaler
+Description=Fleet for ESPHome Proxmox LXC autoscaler
 Documentation=https://github.com/weirded/distributed-esphome/tree/main/deploy/proxmox/scaler
 After=network-online.target
 Wants=network-online.target
