@@ -1,0 +1,39 @@
+suite: ingress
+templates:
+  - templates/ingress.yaml
+release:
+  name: fleet-server
+  namespace: esphome-fleet
+tests:
+  - it: renders nothing when ingress disabled
+    set:
+      server.token: tok
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an Ingress routing to the service when enabled
+    set:
+      server.token: tok
+      ingress.enabled: true
+      ingress.className: nginx
+      ingress.hosts:
+        - host: fleet.example
+          paths:
+            - path: /
+              pathType: Prefix
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: fleet.example
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: fleet-server
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8765

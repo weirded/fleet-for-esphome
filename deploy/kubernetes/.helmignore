@@ -8,3 +8,7 @@
 *.bak
 *.orig
 *~
+# The server chart is a sibling chart nested under this directory
+# (deploy/kubernetes/server/). Exclude it so `helm package` / `helm lint`
+# on the worker chart does not pull the server chart's files in as data.
+server/

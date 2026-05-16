@@ -60,6 +60,28 @@ jobs:
       - name: helm template — host network
         run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-host-network.yaml > /tmp/render-host-network.yaml
 
+      # --- server chart (deploy/kubernetes/server/) -------------------------
+      # The worker chart's .helmignore excludes server/, so the worker lint /
+      # unittest steps above never touch it — the server chart is validated
+      # explicitly here.
+      - name: helm lint — server (defaults)
+        run: helm lint deploy/kubernetes/server/
+
+      - name: helm lint — server (against minimal fixture)
+        run: helm lint deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-minimal.yaml
+
+      - name: helm unittest — server
+        run: helm unittest deploy/kubernetes/server/
+
+      - name: helm template — server minimal
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-minimal.yaml > /tmp/render-server-minimal.yaml
+
+      - name: helm template — server ingress
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-ingress.yaml > /tmp/render-server-ingress.yaml
+
+      - name: helm template — server existing secret
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-existing-secret.yaml > /tmp/render-server-existing-secret.yaml
+
       - name: Install kubeconform
         # Installed from the GitHub release tarball (hash-pinned) instead of
         # `uses: docker://ghcr.io/yannh/kubeconform:...@sha256:...`. Two reasons:
@@ -93,4 +115,7 @@ jobs:
             /tmp/render-minimal.yaml \
             /tmp/render-autoscale.yaml \
             /tmp/render-existing-secret.yaml \
-            /tmp/render-host-network.yaml
+            /tmp/render-host-network.yaml \
+            /tmp/render-server-minimal.yaml \
+            /tmp/render-server-ingress.yaml \
+            /tmp/render-server-existing-secret.yaml
