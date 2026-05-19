@@ -1,4 +1,4 @@
-requests>=2.34.0
+requests>=2.34.2
 psutil>=7.2.2
 pydantic>=2.13.4
 # #108 briefly added py-spy here. #189 replaced it with an in-process
