@@ -3,7 +3,7 @@ pydantic>=2.13.4
 croniter>=6.2.2
 apscheduler>=3.11.2,<4
 aioesphomeapi>=44.23.0
-zeroconf>=0.148.0
+zeroconf>=0.149.17
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
 # boot, scanner.ensure_esphome_installed lazy-installs the HA ESPHome
