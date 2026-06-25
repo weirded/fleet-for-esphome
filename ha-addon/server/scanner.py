@@ -1698,7 +1698,8 @@ def get_device_address(config: dict, device_name: str) -> tuple[str, str]:
     The source is exposed in the UI so users can see how each device's IP
     was resolved (#184).
     """
-    fallback = (f"{device_name}.local", "mdns_default")
+    wifi_domain = (config.get("wifi") or config.get("ethernet") or {}).get("domain", ".local")
+    fallback = (f"{device_name}{wifi_domain}", "mdns_default")
 
     if not isinstance(config, dict):
         return fallback
