@@ -1250,7 +1250,11 @@ def _resolve_esphome_config(config_dir: str, target: str) -> Optional[dict]:
         # already have a cached result for any version of this file — the first
         # resolution will clone, subsequent ones reuse the local checkout.
         already_resolved = target in _config_cache
-        config = do_packages_pass(config, skip_update=already_resolved)
+        import inspect
+        if "skip_update" in inspect.signature(do_packages_pass).parameters:
+            config = do_packages_pass(config, skip_update=already_resolved)
+        else:
+            config = do_packages_pass(config)
         config = merge_packages(config)
 
         # Resolve ${substitutions}. ESPHome 2026.4.0 reshaped the API
