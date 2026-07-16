@@ -21,7 +21,7 @@ cd "$REPO_ROOT"
 # install on (linux/amd64), otherwise platform-conditional transitive deps
 # leak in. The 1.3.1-dev.9 deploy failure was caused by generating the lock
 # on macOS, which pulled in PyObjC as a transitive — Linux can't install
-# that. We pin to python:3.11-slim because that's what both Dockerfiles
+# that. We pin to python:3.12-slim because that's what both Dockerfiles
 # FROM. Re-run via Docker so the result is reproducible regardless of host.
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -29,13 +29,13 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "▶ Refreshing lockfiles inside python:3.11-slim (linux/amd64)…"
+echo "▶ Refreshing lockfiles inside python:3.12-slim (linux/amd64)…"
 
 docker run --rm \
     --platform linux/amd64 \
     -v "$REPO_ROOT":/work \
     -w /work \
-    python:3.11-slim \
+    python:3.12-slim \
     bash -c '
         set -e
         apt-get update -qq && apt-get install -qq -y --no-install-recommends gcc libffi-dev libssl-dev git >/dev/null

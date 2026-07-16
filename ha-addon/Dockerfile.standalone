@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Match ha-addon/Dockerfile's apt layer. `git` is load-bearing for the
 # server's git_versioning module (on-disk history of config edits);

@@ -5,12 +5,14 @@
 #
 # Refresh at every release after verifying the new digest's CVE
 # bulletin:
-#   docker buildx imagetools inspect python:3.11-slim | grep '^Digest:'
+#   docker buildx imagetools inspect python:3.12-slim | grep '^Digest:'
 # Paste that digest here.
-# Last refreshed: 2026-04-22 (IM.3 server+client digest bump, in lockstep
-# with ha-addon/Dockerfile — both must match so a stale client doesn't
-# drift onto a CVE window the server has already cleared).
-FROM python:3.11-slim@sha256:92c262cbb2e99cdc16218338d74fbe518055c13d224d942708f70f8042ff6d18
+# Last refreshed: 2026-07-16 (Python 3.12 bump — ESPHome 2026.7.0 dropped
+# Python 3.11 support, so the worker must run 3.12+ to lazy-install it;
+# server+client digests bumped in lockstep with ha-addon/Dockerfile —
+# both must match so a stale client doesn't drift onto a CVE window the
+# server has already cleared).
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 # Bug #6 (1.6.1): `iputils-ping` is required by the OTA network-diagnostics
 # probe in client.py — without it the probe logs `Ping: [Errno 2] No such
 # file or directory: 'ping'` every time an OTA upload fails, which is

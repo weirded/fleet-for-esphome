@@ -1,7 +1,7 @@
 # #7: fully-qualify the image so Supervisor's build-config regex accepts it.
 #   The regex `^([a-zA-Z\-\.:\d{}]+/)*?([\-\w{}]+)/([\-\w{}]+)(:[\.\-\w{}]+)?$`
-#   requires at least one `/` in the path — `python:3.11-slim` alone doesn't
-#   qualify, but `docker.io/library/python:3.11-slim` does. Same image.
+#   requires at least one `/` in the path — `python:3.12-slim` alone doesn't
+#   qualify, but `docker.io/library/python:3.12-slim` does. Same image.
 #
 # Bug #8: Supervisor emits a "build.yaml is deprecated, move params into the
 # Dockerfile directly" WARNING on every addon-validation pass. We tried
@@ -38,5 +38,5 @@
 # file in an attempt to "modernise" without a plan for Alpine
 # compatibility.
 build_from:
-  aarch64: "docker.io/library/python:3.11-slim"
-  amd64: "docker.io/library/python:3.11-slim"
+  aarch64: "docker.io/library/python:3.12-slim"
+  amd64: "docker.io/library/python:3.12-slim"

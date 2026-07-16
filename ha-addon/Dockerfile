@@ -5,7 +5,7 @@
 # the ``apt-get install`` step below and every sdist dep that ESPHome
 # pulls in at runtime. The per-arch ``build_from`` map in build.yaml
 # is identical for aarch64 and amd64
-# (``docker.io/library/python:3.11-slim``), and Docker's multi-arch
+# (``docker.io/library/python:3.12-slim``), and Docker's multi-arch
 # manifest selection picks the right variant based on the builder's
 # platform, so one FROM line covers both. The ``ARG BUILD_FROM`` lets
 # Supervisor override via ``--build-arg`` when it's actually driving
@@ -22,7 +22,7 @@
 #
 # PR #80 review: the previous comment claimed the digest "matches
 # ha-addon/build.yaml" — it doesn't. ``build.yaml`` carries the
-# **tag-only** image (``docker.io/library/python:3.11-slim``) because
+# **tag-only** image (``docker.io/library/python:3.12-slim``) because
 # Supervisor's ``supervisor/validate.py`` regex silently rejects
 # ``@sha256:…`` in the ``build_from`` map (it falls back to its own
 # arch-base image, which then breaks ``apt-get``).
@@ -38,8 +38,8 @@
 # because that's a secondary path explicitly scoped as "used when GHCR
 # is unreachable." Refresh both server + client digests in lockstep on
 # each release (cross-check with ``docker buildx imagetools inspect
-# docker.io/library/python:3.11-slim``).
-ARG BUILD_FROM=docker.io/library/python:3.11-slim@sha256:92c262cbb2e99cdc16218338d74fbe518055c13d224d942708f70f8042ff6d18
+# docker.io/library/python:3.12-slim``).
+ARG BUILD_FROM=docker.io/library/python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH
