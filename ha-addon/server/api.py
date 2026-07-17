@@ -562,12 +562,18 @@ async def get_next_job(request: web.Request) -> web.Response:
     # Different timezones produce different config_hash → unnecessary clean rebuilds.
     import time as _time  # noqa: PLC0415
     server_tz = _time.tzname[0] if _time.daylight == 0 else _time.tzname[1]
-    try:
-        # Prefer the actual TZ env var or read /etc/timezone for the IANA name
-        import os as _os  # noqa: PLC0415
-        server_tz = _os.environ.get("TZ") or open("/etc/timezone").read().strip() or server_tz
-    except Exception:
-        pass
+    import os as _os  # noqa: PLC0415
+
+    # Prefer the actual TZ env var or read /etc/timezone for the IANA name
+    tz_env = _os.environ.get("TZ")
+    if tz_env:
+        server_tz = tz_env
+    else:
+        try:
+            with open("/etc/timezone") as f:
+                server_tz = f.read().strip() or server_tz
+        except OSError:
+            pass
 
     assignment = JobAssignment(
         job_id=job.id,
