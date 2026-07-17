@@ -21,14 +21,14 @@
 #
 # Env overrides:
 #   STANDALONE_HOST       (default docker-pve)
-#   ESPHOME_VERSION       (default 2026.4.5 — pinned to compile-test.yml)
+#   ESPHOME_VERSION       (default 2026.7.0 — pinned to compile-test.yml)
 #   BOOTSTRAP_TIMEOUT     (default 600 seconds = 10 min)
 
 set -euo pipefail
 
 STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
-ESPHOME_VERSION="${ESPHOME_VERSION:-2026.4.5}"
+ESPHOME_VERSION="${ESPHOME_VERSION:-2026.7.0}"
 BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-600}"
 
 STANDALONE_TOKEN_FILE="${STANDALONE_TOKEN_FILE:-$HOME/.config/distributed-esphome/standalone-token}"
