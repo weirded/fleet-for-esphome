@@ -38,13 +38,7 @@ jobs:
           pip install esphome
           pip install \
             pytest pytest-asyncio pytest-cov pytest-xdist pytest-socket \
-            # icmplib is a real server dep (requirements.txt: icmplib>=3.0.4)
-            # used by the /ui/api ping handler. It USED to arrive transitively
-            # via esphome, but esphome 2026.7.0 dropped it — without an explicit
-            # install the test_device_poller MagicMock stub for icmplib activates
-            # and test_ui_api's ping test breaks (except <MagicMock> is not a
-            # valid exception class). Install it explicitly, matching production.
-            aiohttp aioesphomeapi zeroconf icmplib \
+            aiohttp aioesphomeapi zeroconf \
             requests psutil pydantic croniter apscheduler
           # The HA integration tests (tests/test_integration_*.py) need
           # the `homeassistant` package installed to import
