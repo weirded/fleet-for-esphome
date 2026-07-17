@@ -43,7 +43,7 @@ jobs:
       matrix:
         esphome_version:
           - "2026.4.0"  # pinned floor — `MIN_ESPHOME_VERSION`
-          - "2026.4.5"  # latest stable shipped (bump per release)
+          - "2026.7.0"  # latest stable shipped (bump per release) — regression guard for #240 (py3.12 floor)
         target:
           - esp8266-arduino
           - esp32-arduino
@@ -93,7 +93,7 @@ jobs:
       matrix:
         esphome_version:
           - "2026.4.0"
-          - "2026.4.5"
+          - "2026.7.0"
         # Test a subset on the server image — if client passes, server should too
         # Focus on the platforms that historically had issues (toolchain deps)
         target:
