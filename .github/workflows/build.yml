@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Worker client — its Dockerfile FROMs python:3.11-slim, so
+          # Worker client — its Dockerfile FROMs python:3.13-slim, so
           # buildx builds straight through.
           - name: client
             context: ha-addon/client
@@ -54,7 +54,7 @@ jobs:
             build_args: ""
           # Add-on server — its Dockerfile expects BUILD_FROM from
           # Supervisor. The default in the Dockerfile points at the
-          # same python:3.11-slim digest build.yaml uses for local
+          # same python:3.13-slim digest build.yaml uses for local
           # docker-build smokes, so leaving BUILD_FROM unset is fine.
           - name: server-addon
             context: ha-addon

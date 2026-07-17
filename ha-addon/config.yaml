@@ -1,5 +1,5 @@
 name: "Fleet for ESPHome"
-version: "1.7.2-dev.9"
+version: "1.7.2-dev.10"
 slug: "esphome_dist_server"
 description: "A modern Home Assistant UI for ESPHome — git-backed config history with rollback, live compile queue, per-device version pinning, scheduled OTA, optional distributed compilation. Works whether you have 3 or 300 devices."
 url: "https://github.com/weirded/fleet-for-esphome"
