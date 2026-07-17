@@ -4,9 +4,9 @@
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.7.1    | ✅ Current release  |
-| 1.7.0    | ✅ Previous stable — security fixes only if trivially backportable |
-| < 1.7.0  | ❌ No patches       |
+| 1.7.2    | ✅ Current release  |
+| 1.7.1    | ✅ Previous stable — security fixes only if trivially backportable |
+| < 1.7.1  | ❌ No patches       |
 
 *(Note: the 1.5 release was developed as `1.4.1-dev.N` through dev.72 and renumbered late cycle as scope grew beyond a patch release. Docker tags with the `1.4.1-dev.N` stamp remain pullable from GHCR but are superseded by the 1.5.x stable tags.)*
 
@@ -126,7 +126,7 @@ Cycle deltas for 1.6.2:
 
 Cycle deltas for 1.6.1:
 
-- **F-13 (Docker base image digest pinning)** moved OPEN → **FIXED (partial)** via SS.4. Worker Dockerfile pins `python:3.11-slim@sha256:…`; server Dockerfile pins the `ARG BUILD_FROM` default digest. Supervisor's production build path still can't carry a digest (upstream `build_from` regex rejects `@sha256:…`); partial until that's relaxed.
+- **F-13 (Docker base image digest pinning)** moved OPEN → **FIXED (partial)** via SS.4. Worker Dockerfile pins `python:3.13-slim@sha256:…`; server Dockerfile pins the `ARG BUILD_FROM` default digest. Supervisor's production build path still can't carry a digest (upstream `build_from` regex rejects `@sha256:…`); partial until that's relaxed.
 - **F-18 (worker pip install hash-pinning)** was marked FIXED (partial) in 1.5.0 via SC.3, then re-assessed and marked **WONTFIX** in 1.6.1: the single-version constraints file we committed rarely matched the version actually requested at job time (users routinely pin older ESPHome versions or track newer releases than we'd had time to generate constraints for), so the hardened `--require-hashes` path's hit rate in practice was ~0% and the fallback-to-unpinned-install behavior was the load-bearing case. See §F-18 in the audit for the full re-assessment.
 - **F-21 (add-on ran unconfined)** added and immediately **FIXED** in the same cycle via SS.1 — AppArmor profile attached, Supervisor runs the container under confinement.
 
