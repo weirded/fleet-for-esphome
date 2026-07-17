@@ -1,0 +1,121 @@
+name: Helm chart CI
+
+# Validates deploy/kubernetes/ on every PR + push to develop/main:
+#   1. helm lint        — schema + YAML correctness
+#   2. helm-unittest    — template-rendering unit tests under tests/
+#   3. helm template    — render against ci/values-*.yaml fixtures
+#
+# Cheap (~30s); runs only when the chart or its CI changes so we don't
+# slow down server PRs. Pairs with publish-* workflows; this one does
+# NOT publish, only validates.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/kubernetes/**"
+      - ".github/workflows/chart-ci.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "deploy/kubernetes/**"
+      - ".github/workflows/chart-ci.yml"
+
+concurrency:
+  group: chart-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.20.2
+
+      - name: helm lint (defaults)
+        run: helm lint deploy/kubernetes/
+
+      - name: helm lint (against minimal fixture)
+        run: helm lint deploy/kubernetes/ -f deploy/kubernetes/ci/values-minimal.yaml
+
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.0
+
+      - name: helm unittest
+        run: helm unittest deploy/kubernetes/
+
+      - name: helm template — minimal
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-minimal.yaml > /tmp/render-minimal.yaml
+
+      - name: helm template — autoscale
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-autoscale.yaml > /tmp/render-autoscale.yaml
+
+      - name: helm template — existing secret
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-existing-secret.yaml > /tmp/render-existing-secret.yaml
+
+      - name: helm template — host network
+        run: helm template fleet-worker deploy/kubernetes/ -f deploy/kubernetes/ci/values-host-network.yaml > /tmp/render-host-network.yaml
+
+      # --- server chart (deploy/kubernetes/server/) -------------------------
+      # The worker chart's .helmignore excludes server/, so the worker lint /
+      # unittest steps above never touch it — the server chart is validated
+      # explicitly here.
+      - name: helm lint — server (defaults)
+        run: helm lint deploy/kubernetes/server/
+
+      - name: helm lint — server (against minimal fixture)
+        run: helm lint deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-minimal.yaml
+
+      - name: helm unittest — server
+        run: helm unittest deploy/kubernetes/server/
+
+      - name: helm template — server minimal
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-minimal.yaml > /tmp/render-server-minimal.yaml
+
+      - name: helm template — server ingress
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-ingress.yaml > /tmp/render-server-ingress.yaml
+
+      - name: helm template — server existing secret
+        run: helm template fleet-server deploy/kubernetes/server/ -f deploy/kubernetes/server/ci/values-existing-secret.yaml > /tmp/render-server-existing-secret.yaml
+
+      - name: Install kubeconform
+        # Installed from the GitHub release tarball (hash-pinned) instead of
+        # `uses: docker://ghcr.io/yannh/kubeconform:...@sha256:...`. Two reasons:
+        #   1. CLAUDE.md SC.1 (scripts/check-invariants.sh) requires every
+        #      `uses: org/repo@<ref>` to be a 40-char commit SHA — the docker
+        #      `@sha256:<digest>` form is 64 hex chars and trips the linter.
+        #   2. Avoids ghcr.io anonymous-pull rate-limits / transient image-pull
+        #      failures that fail the job before the kubeconform step runs.
+        # The release tarball is sha256-pinned below, so a tampered upload
+        # can't silently swap the binary out from under us.
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION=v0.6.7
+          KUBECONFORM_SHA256=95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+          curl -fsSL -o kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          rm -f kubeconform kubeconform.tar.gz
+          kubeconform -v
+
+      - name: Validate rendered manifests with kubeconform
+        # `-ignore-missing-schemas` skips KEDA CRDs (no schema in the default
+        # store) while still hard-failing on stock Kubernetes resources — a
+        # failure here means a manifest is genuinely broken and should block
+        # the PR (no `continue-on-error`).
+        run: |
+          kubeconform -summary -strict -ignore-missing-schemas \
+            -kubernetes-version 1.30.0 \
+            /tmp/render-minimal.yaml \
+            /tmp/render-autoscale.yaml \
+            /tmp/render-existing-secret.yaml \
+            /tmp/render-host-network.yaml \
+            /tmp/render-server-minimal.yaml \
+            /tmp/render-server-ingress.yaml \
+            /tmp/render-server-existing-secret.yaml

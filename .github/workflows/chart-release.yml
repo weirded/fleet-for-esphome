@@ -1,0 +1,74 @@
+name: Publish Helm charts
+
+# Packages the two charts under deploy/kubernetes/ and pushes them to GHCR as
+# OCI artifacts on every v* release tag:
+#   oci://ghcr.io/<owner>/charts/esphome-fleet-worker
+#   oci://ghcr.io/<owner>/charts/esphome-fleet-server
+#
+# Chart `version` is independent SemVer, owned by each Chart.yaml — bump it
+# there when the chart itself changes. `appVersion` is overridden here to the
+# release tag so a published chart records which server/worker image it pins.
+#
+# Install a published chart with:
+#   helm install fleet-worker oci://ghcr.io/weirded/charts/esphome-fleet-worker
+#   helm install fleet-server oci://ghcr.io/weirded/charts/esphome-fleet-server
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: chart-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Helm
+        uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.20.2
+
+      - name: Resolve app version from tag
+        id: version
+        run: |
+          set -euo pipefail
+          # workflow_dispatch has no tag — fall back to the chart's appVersion.
+          ref="${GITHUB_REF#refs/tags/}"
+          if [[ "$ref" == v* ]]; then
+            echo "app=${ref#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push charts
+        run: |
+          set -euo pipefail
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          app='${{ steps.version.outputs.app }}'
+          appflag=()
+          [[ -n "$app" ]] && appflag=(--app-version "$app")
+          mkdir -p dist
+          for chart in deploy/kubernetes deploy/kubernetes/server; do
+            helm lint "$chart"
+            helm package "$chart" "${appflag[@]}" --destination dist/
+          done
+          for pkg in dist/*.tgz; do
+            echo "Pushing $pkg → oci://ghcr.io/${owner}/charts"
+            helm push "$pkg" "oci://ghcr.io/${owner}/charts"
+          done

@@ -1,0 +1,167 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+release:
+  name: fleet-worker
+  namespace: esphome-fleet
+chart:
+  appVersion: 1.7.0
+tests:
+  - it: sets fixed replicas from minReplicaCount when autoscaling disabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.minReplicaCount: 2
+      persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: omits replicas when autoscaling enabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.enabled: true
+    asserts:
+      - notExists:
+          path: spec.replicas
+
+  - it: requires server.url
+    set:
+      server.token: tok
+    asserts:
+      - failedTemplate:
+          errorMessage: "server.url is required"
+
+  - it: pulls token from chart-managed Secret by default
+    set:
+      server.url: http://example:8765
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.name
+          value: fleet-worker
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.key
+          value: SERVER_TOKEN
+
+  - it: pulls token from existingSecret when provided
+    set:
+      server.url: http://example:8765
+      server.existingSecret: my-fleet-secret
+      server.existingSecretTokenKey: API_TOKEN
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.name
+          value: my-fleet-secret
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.key
+          value: API_TOKEN
+
+  - it: propagates worker.tags as a comma-joined env
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      worker.tags:
+        - k8s
+        - "os:linux"
+        - bursty
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='WORKER_TAGS')].value
+          value: "k8s,os:linux,bursty"
+
+  - it: enables hostNetwork and dnsPolicy ClusterFirstWithHostNet when set
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      hostNetwork: true
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+      - equal:
+          path: spec.template.spec.dnsPolicy
+          value: ClusterFirstWithHostNet
+
+  - it: defaults terminationGracePeriodSeconds to 600
+    set:
+      server.url: http://example:8765
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 600
+
+  - it: uses PVC volume in fixed mode
+    set:
+      server.url: http://example:8765
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=='versions')].persistentVolumeClaim.claimName
+          value: fleet-worker-versions
+
+  - it: falls back to emptyDir volume when autoscaling enabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.enabled: true
+    asserts:
+      - exists:
+          path: spec.template.spec.volumes[?(@.name=='versions')].emptyDir
+      - notExists:
+          path: spec.template.spec.volumes[?(@.name=='versions')].persistentVolumeClaim
+
+  - it: trims trailing slash on server.url for SERVER_URL env
+    set:
+      server.url: http://example:8765/
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_URL')].value
+          value: http://example:8765
+
+  - it: fails when neither server.token nor server.existingSecret is set
+    set:
+      server.url: http://example:8765
+    asserts:
+      - failedTemplate:
+          errorMessage: "esphome-fleet-worker: either server.token or server.existingSecret must be set (the worker image requires SERVER_TOKEN at startup)"
+
+  - it: fails when fixed-mode persistence + minReplicaCount > 1 + RWO only
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.minReplicaCount: 2
+      persistence.enabled: true
+      persistence.accessModes:
+        - ReadWriteOnce
+    asserts:
+      - failedTemplate:
+          errorMessage: "esphome-fleet-worker: with persistence.enabled and autoscaling.minReplicaCount > 1, persistence.accessModes must include ReadWriteMany — a single RWO PVC cannot multi-attach across pods. Either set persistence.enabled=false (use emptyDir), reduce autoscaling.minReplicaCount to 1, or provide RWX storage."
+
+  - it: passes when fixed-mode persistence + minReplicaCount > 1 + RWX
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.minReplicaCount: 2
+      persistence.enabled: true
+      persistence.accessModes:
+        - ReadWriteMany
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: passes when minReplicaCount > 1 + persistence disabled (emptyDir)
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.minReplicaCount: 3
+      persistence.enabled: false
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3

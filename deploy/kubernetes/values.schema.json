@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "esphome-fleet-worker chart values",
+  "type": "object",
+  "required": ["server"],
+  "additionalProperties": true,
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Base URL of the distributed-esphome server, e.g. http://homeassistant.local:8765. Required at install time — enforced by deployment.yaml's `required` helper, which raises a fatal error during `helm install` / `helm template` when empty. Allowed empty in this schema so `helm lint` (without `--strict`) emits a non-fatal WARN rather than rejecting the chart against unfilled defaults; CI uses `helm lint --strict -f ci/values-minimal.yaml` to catch the misconfiguration."
+        },
+        "token": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretTokenKey": { "type": "string" }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "tagsOverwrite": { "type": "boolean" },
+        "maxParallelJobs": { "type": "integer", "minimum": 1 },
+        "diskQuotaGb": { "type": "integer", "minimum": 0 },
+        "minFreeDiskPct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "pollInterval": { "type": "integer", "minimum": 1 },
+        "heartbeatInterval": { "type": "integer", "minimum": 1 },
+        "jobTimeout": { "type": "integer", "minimum": 30 },
+        "otaTimeout": { "type": "integer", "minimum": 10 },
+        "extraEnv": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicaCount": { "type": "integer", "minimum": 0 },
+        "maxReplicaCount": { "type": "integer", "minimum": 1 },
+        "cooldownPeriod": { "type": "integer", "minimum": 0 },
+        "pollingInterval": { "type": "integer", "minimum": 1 },
+        "targetQueueSize": { "type": "integer", "minimum": 1 },
+        "metricsApi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "insecureTLSSkipVerify": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageClass": { "type": "string" },
+        "size": { "type": "string" },
+        "accessModes": { "type": "array", "items": { "type": "string" } },
+        "annotations": { "type": "object" }
+      }
+    },
+    "resources": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array", "items": { "type": "object" } },
+    "affinity": { "type": "object" },
+    "topologySpreadConstraints": { "type": "array", "items": { "type": "object" } },
+    "hostNetwork": { "type": "boolean" },
+    "dnsPolicy": { "type": "string" },
+    "priorityClassName": { "type": "string" },
+    "podLabels": { "type": "object" },
+    "podAnnotations": { "type": "object" },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object" }
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" }
+  }
+}
