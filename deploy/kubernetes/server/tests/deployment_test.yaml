@@ -1,0 +1,107 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+release:
+  name: fleet-server
+  namespace: esphome-fleet
+chart:
+  appVersion: 1.7.0
+tests:
+  - it: renders a single-replica Recreate Deployment
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: fails when neither server.token nor server.existingSecret is set
+    asserts:
+      - failedTemplate:
+          errorMessage: "esphome-fleet-server: either server.token or server.existingSecret must be set (the server requires SERVER_TOKEN at startup)"
+
+  - it: sets HA_MODE to standalone
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='HA_MODE')].value
+          value: standalone
+
+  - it: sets the non-root git and uv environment for the mounted PVCs
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='UV_CACHE_DIR')].value
+          value: /tmp/.uv
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='GIT_CONFIG_PARAMETERS')].value
+          value: "'safe.directory=/config/esphome'"
+
+  - it: pulls token from chart-managed Secret by default
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.name
+          value: fleet-server
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.key
+          value: SERVER_TOKEN
+
+  - it: pulls token from existingSecret when provided
+    set:
+      server.existingSecret: my-fleet-secret
+      server.existingSecretTokenKey: API_TOKEN
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.name
+          value: my-fleet-secret
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=='SERVER_TOKEN')].valueFrom.secretKeyRef.key
+          value: API_TOKEN
+
+  - it: runs non-root by default
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 1000
+
+  - it: mounts the config and data PVCs
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=='config')].persistentVolumeClaim.claimName
+          value: fleet-server-config
+      - equal:
+          path: spec.template.spec.volumes[?(@.name=='data')].persistentVolumeClaim.claimName
+          value: fleet-server-data
+
+  - it: falls back to emptyDir when persistence disabled
+    set:
+      server.token: tok
+      persistence.config.enabled: false
+      persistence.data.enabled: false
+    asserts:
+      - exists:
+          path: spec.template.spec.volumes[?(@.name=='config')].emptyDir
+      - exists:
+          path: spec.template.spec.volumes[?(@.name=='data')].emptyDir
+
+  - it: exposes the server on container port 8765
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8765

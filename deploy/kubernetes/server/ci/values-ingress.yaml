@@ -1,0 +1,15 @@
+server:
+  token: ci-test-token-do-not-deploy
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: fleet.ci.example
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: fleet-ci-tls
+      hosts:
+        - fleet.ci.example

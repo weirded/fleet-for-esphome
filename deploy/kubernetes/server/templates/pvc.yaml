@@ -1,0 +1,39 @@
+{{- /*
+  Two PVCs — /config/esphome and /data. Rendered into one file; the $first
+  flag emits the `---` separator only *between* enabled PVCs so a disabled
+  first PVC never leaves a leading separator (an empty leading document).
+*/ -}}
+{{- $root := . -}}
+{{- $first := true -}}
+{{- range $vol := tuple "config" "data" -}}
+{{- $cfg := index $root.Values.persistence $vol -}}
+{{- if $cfg.enabled }}
+{{- if not $first }}
+---
+{{- end }}
+{{- $first = false }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "esphome-fleet-server.fullname" $root }}-{{ $vol }}
+  labels:
+    {{- include "esphome-fleet-server.labels" $root | nindent 4 }}
+  {{- with $cfg.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $cfg.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ $cfg.size | quote }}
+  {{- if $cfg.storageClass }}
+  {{- if eq $cfg.storageClass "-" }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ $cfg.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}
+{{- end -}}

@@ -1,0 +1,28 @@
+esphome-fleet-worker {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+Server URL: {{ .Values.server.url }}
+
+{{- if .Values.autoscaling.enabled }}
+
+Autoscaling: ENABLED via KEDA.
+  minReplicaCount = {{ .Values.autoscaling.minReplicaCount }}
+  maxReplicaCount = {{ .Values.autoscaling.maxReplicaCount }}
+  Target queue size per worker = {{ .Values.autoscaling.targetQueueSize }}
+  Cooldown period = {{ .Values.autoscaling.cooldownPeriod }}s
+
+Watch the scaler:
+  kubectl -n {{ .Release.Namespace }} get scaledobject,deployment,pods -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- else }}
+
+Autoscaling: disabled. Running {{ .Values.autoscaling.minReplicaCount }} fixed replica(s).
+{{- end }}
+
+Verify the workers registered with the server:
+  curl -sS -H "Authorization: Bearer <SERVER_TOKEN>" {{ .Values.server.url }}/api/v1/status
+
+You should see online_workers >= 1 once a pod is Running.
+
+Tail logs:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+The worker(s) appear in the Workers tab of the Fleet UI tagged: {{ join "," .Values.worker.tags }}

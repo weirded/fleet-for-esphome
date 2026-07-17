@@ -1,0 +1,47 @@
+suite: pvc
+templates:
+  - templates/pvc.yaml
+release:
+  name: fleet-server
+  namespace: esphome-fleet
+tests:
+  - it: renders both PVCs by default
+    set:
+      server.token: tok
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: fleet-server-config
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: fleet-server-data
+        documentIndex: 1
+
+  - it: omits the config PVC when persistence.config disabled
+    set:
+      server.token: tok
+      persistence.config.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: fleet-server-data
+
+  - it: applies storageClass and size overrides
+    set:
+      server.token: tok
+      persistence.data.storageClass: fast-ssd
+      persistence.data.size: 20Gi
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast-ssd
+        documentIndex: 1
+      - equal:
+          path: spec.resources.requests.storage
+          value: 20Gi
+        documentIndex: 1

@@ -1,0 +1,26 @@
+apiVersion: v2
+name: esphome-fleet-worker
+description: |
+  Build workers for distributed-esphome (Fleet for ESPHome). Optionally autoscales
+  on the server's queue depth via KEDA. Pure replica scaling — no node-state
+  awareness; bring your own cluster autoscaler / Wake-on-LAN / Karpenter if
+  you want nodes to power down when idle.
+type: application
+version: 0.1.0
+appVersion: "1.7.0"
+home: https://github.com/weirded/fleet-for-esphome
+sources:
+  - https://github.com/weirded/fleet-for-esphome
+keywords:
+  - esphome
+  - home-assistant
+  - homeassistant
+  - iot
+  - build-worker
+  - keda
+maintainers:
+  - name: weirded
+    url: https://github.com/weirded
+annotations:
+  artifacthub.io/category: integration-delivery
+  artifacthub.io/license: MIT

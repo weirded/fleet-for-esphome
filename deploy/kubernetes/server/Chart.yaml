@@ -1,0 +1,25 @@
+apiVersion: v2
+name: esphome-fleet-server
+description: |
+  Fleet for ESPHome (distributed-esphome) standalone server. Runs the
+  esphome-dist-server container outside Home Assistant — the web UI, job
+  queue, and device discovery — for users who want to run on Kubernetes.
+  Pair with the esphome-fleet-worker chart for build workers.
+type: application
+version: 0.1.0
+appVersion: "1.7.0"
+home: https://github.com/weirded/fleet-for-esphome
+sources:
+  - https://github.com/weirded/fleet-for-esphome
+keywords:
+  - esphome
+  - home-assistant
+  - homeassistant
+  - iot
+  - build-server
+maintainers:
+  - name: weirded
+    url: https://github.com/weirded
+annotations:
+  artifacthub.io/category: integration-delivery
+  artifacthub.io/license: MIT

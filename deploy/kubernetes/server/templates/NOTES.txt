@@ -1,0 +1,24 @@
+esphome-fleet-server {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+The Fleet for ESPHome server is reachable inside the cluster at:
+  http://{{ include "esphome-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+
+{{- if .Values.ingress.enabled }}
+
+Ingress is enabled. Open the UI at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+Ingress is disabled. To reach the UI from your workstation, port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "esphome-fleet-server.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  # then open http://127.0.0.1:{{ .Values.service.port }}
+{{- end }}
+
+Point build workers at this server. Install the esphome-fleet-worker chart with:
+  server.url   = http://{{ include "esphome-fleet-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  server.token = the same token configured for this release
+
+Tail logs:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
