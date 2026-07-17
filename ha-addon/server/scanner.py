@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import logging
 import subprocess
@@ -1249,8 +1250,20 @@ def _resolve_esphome_config(config_dir: str, target: str) -> Optional[dict]:
         # Resolve packages (local + remote includes). Skip git updates if we
         # already have a cached result for any version of this file — the first
         # resolution will clone, subsequent ones reuse the local checkout.
+        #
+        # ESPHome <=2026.5 accepted `skip_update` to reuse previously-cloned
+        # remote package checkouts. 2026.6 removed the kwarg; the signature is
+        # now `(config, *, command_line_substitutions=None)`, so passing it
+        # raises TypeError and kills this whole fallback path. Probe the
+        # signature rather than catching TypeError — do_packages_pass clones
+        # git repos, so a blind retry would re-run those side effects after
+        # partial work. On the modern signature the clone-caching is ESPHome's
+        # own concern and `already_resolved` no longer has a knob to turn.
         already_resolved = target in _config_cache
-        config = do_packages_pass(config, skip_update=already_resolved)
+        if "skip_update" in inspect.signature(do_packages_pass).parameters:
+            config = do_packages_pass(config, skip_update=already_resolved)  # type: ignore[call-arg]
+        else:
+            config = do_packages_pass(config)
         config = merge_packages(config)
 
         # Resolve ${substitutions}. ESPHome 2026.4.0 reshaped the API

@@ -12,6 +12,7 @@
 
 **Bug fixes.**
 
+- **Newer ESPHome releases now compile.** ESPHome 2026.7.0 requires Python 3.12 or newer, but the add-on and its build workers still shipped on Python 3.11 — so every compile pinned to 2026.7.0 (or any future release with the same requirement) failed at the install step with “No matching distribution found,” before any firmware was built. The add-on now runs on Python 3.13, so current and upcoming ESPHome versions install and compile normally. **Remote build workers must rebuild their Docker image** to pick up the new runtime — a worker still on the old image will show as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
 - **#134** — `wifi.use_address` set to a non-`.local` FQDN (e.g. a corporate-DNS hostname for a VPN'd device) was honoured by the Devices tab and the OTA network-diagnostics dump, but Live Logs and the OTA upload itself silently fell back to `<name>.local` and failed to connect. All four code paths now go through the same address-resolution helper with hyphen/underscore-tolerant lookup, so a YAML `wifi.use_address` is honoured everywhere.
 
 **For integrators.**
