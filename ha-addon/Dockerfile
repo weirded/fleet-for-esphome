@@ -71,7 +71,12 @@ RUN . /etc/os-release && [ "$ID" = "debian" ] || { \
 # Same deps as the proven client Dockerfile — native glibc for PlatformIO toolchains.
 # Bug #6 (1.6.1): `iputils-ping` keeps the client's OTA network-diagnostics
 # probe functional when the server also hosts a local worker.
-RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping && rm -rf /var/lib/apt/lists/*
+# #240 (ESPHome 2026.7): the new native ESP-IDF toolchain (replacing
+# PlatformIO for ESP32) downloads openocd-esp32 and *verifies it by
+# executing it* during framework install; openocd links libusb-1.0.so.0,
+# so without `libusb-1.0-0` the verify exits 127 and the whole ESP-IDF
+# install fails -> every ESP32 compile dies.
+RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping libusb-1.0-0 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # E.1: install from the hash-pinned lockfile, not the >= range list. The
