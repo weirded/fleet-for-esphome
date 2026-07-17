@@ -20,6 +20,8 @@
 
 - **KEDA-compatible queue-depth metric.** New `GET /api/v1/metrics/queue` returns `{pending, working, active, online_workers, max_parallel_capacity, schema_version}` for external autoscalers (KEDA's `metrics-api` scaler, k8s HPA, Sablier, the in-tree Proxmox scaler). Bearer-auth via the existing `/api/v1/*` middleware — same worker token, read-only metric. Lets you spin workers up only when there's pending compile work and shut them down when idle.
 
+- **Helm chart for Kubernetes build workers.** A new chart under `deploy/kubernetes/` deploys build workers on Kubernetes and wires them to KEDA autoscaling off the queue-depth metric above — workers scale up when compile work is pending and down to zero when idle. Ships with a values schema, unit tests, and a README/design doc. (Community contribution.)
+
 **Under the hood.** The server and build-worker images move to Python 3.13. Groundwork for UI translations landed (an i18next foundation and a Settings language selector); actual translated locales will follow in a later release.
 
 ## 1.7.1
