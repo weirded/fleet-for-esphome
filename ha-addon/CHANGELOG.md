@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.7.2 (unreleased — dev only)
+## 1.7.2
 
-**Compiles no longer get stuck failing after the built-in worker frees disk space.** When the add-on's built-in worker trimmed its ESPHome version cache to stay within its disk budget, it could delete the very ESPHome version the server needs to prepare each build — after which every compile failed with a “Bundle creation failed” error and the queue stalled until the add-on was restarted. The server now reserves its active ESPHome version so the worker's cache cleanup leaves it alone, and transparently reinstalls it if it ever goes missing, so the build queue keeps running on its own.
+**Newer ESPHome releases now compile.** ESPHome 2026.7.0 requires Python 3.12 or newer, but the add-on and its build workers still shipped on Python 3.11 — so every compile pinned to 2026.7.0 failed at the install step with "No matching distribution found," before any firmware was built. Even once that was cleared, ESP32 builds hit a second wall: 2026.7 replaced its build toolchain with a native ESP-IDF installer that needs a system library the image didn't carry, so ESP32 firmware still wouldn't compile. Both are fixed — the add-on now runs on Python 3.13 with the required libraries, and current and upcoming ESPHome versions install and compile normally across ESP32, ESP8266, RP2040, and LibreTiny targets. **Remote build workers must rebuild their Docker image** to pick up the new runtime — a worker still on the old image shows as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
 
 **Settings → Display → Font size.** New three-way picker (Small / Normal / Large) that scales the whole UI proportionally — tables, buttons, dialogs, and modals shrink or grow together rather than just body copy. Useful if you run Home Assistant at a non-100 % browser zoom and find Fleet's secondary text too small. Default stays at Normal so existing installs render byte-identical to 1.7.1.
 
@@ -12,12 +12,15 @@
 
 **Bug fixes.**
 
-- **Newer ESPHome releases now compile.** ESPHome 2026.7.0 requires Python 3.12 or newer, but the add-on and its build workers still shipped on Python 3.11 — so every compile pinned to 2026.7.0 (or any future release with the same requirement) failed at the install step with “No matching distribution found,” before any firmware was built. The add-on now runs on Python 3.13, so current and upcoming ESPHome versions install and compile normally. **Remote build workers must rebuild their Docker image** to pick up the new runtime — a worker still on the old image will show as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
-- **#134** — `wifi.use_address` set to a non-`.local` FQDN (e.g. a corporate-DNS hostname for a VPN'd device) was honoured by the Devices tab and the OTA network-diagnostics dump, but Live Logs and the OTA upload itself silently fell back to `<name>.local` and failed to connect. All four code paths now go through the same address-resolution helper with hyphen/underscore-tolerant lookup, so a YAML `wifi.use_address` is honoured everywhere.
+- **Compiles no longer get stuck failing after the built-in worker frees disk space.** When the add-on's built-in worker trimmed its ESPHome version cache to stay within its disk budget, it could delete the very ESPHome version the server needs to prepare each build — after which every compile failed with a "Bundle creation failed" error and the queue stalled until the add-on was restarted. The server now reserves its active ESPHome version so the worker's cache cleanup leaves it alone, and transparently reinstalls it if it ever goes missing, so the build queue keeps running on its own.
+- **`wifi.use_address` set to a non-`.local` hostname is now honoured everywhere.** For a device reached by a corporate-DNS FQDN (e.g. a VPN'd device where mDNS doesn't reach Home Assistant), the address was respected by the Devices tab and the OTA network-diagnostics dump, but Live Logs and the OTA upload itself silently fell back to `<name>.local` and failed to connect. All four paths now resolve the address the same way.
+- **Standalone Docker workers no longer flap Offline during large ESPHome installs.** On the standalone (non-add-on) deployment with slower storage, the built-in worker could stall its own heartbeat while measuring disk usage after a big ESPHome install — long enough for the server to mark it offline and abandon the in-flight compile, then recover, in a loop. Disk measurement now runs on a background sampler so heartbeats keep flowing.
 
 **For integrators.**
 
-- **#168 — KEDA-compatible queue-depth metric.** New `GET /api/v1/metrics/queue` returns `{pending, working, active, online_workers, max_parallel_capacity, schema_version}` for external autoscalers (KEDA's `metrics-api` scaler, k8s HPA, Sablier, the in-tree Proxmox scaler). Bearer-auth via the existing `/api/v1/*` middleware — same worker token, read-only metric. Lets you spin workers up only when there's pending compile work and shut them down when idle.
+- **KEDA-compatible queue-depth metric.** New `GET /api/v1/metrics/queue` returns `{pending, working, active, online_workers, max_parallel_capacity, schema_version}` for external autoscalers (KEDA's `metrics-api` scaler, k8s HPA, Sablier, the in-tree Proxmox scaler). Bearer-auth via the existing `/api/v1/*` middleware — same worker token, read-only metric. Lets you spin workers up only when there's pending compile work and shut them down when idle.
+
+**Under the hood.** The server and build-worker images move to Python 3.13. Groundwork for UI translations landed (an i18next foundation and a Settings language selector); actual translated locales will follow in a later release.
 
 ## 1.7.1
 

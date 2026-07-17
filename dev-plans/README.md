@@ -6,7 +6,7 @@ Roadmap and bug tracking for Fleet for ESPHome, organized by release.
 
 Each WORKITEMS file's first paragraph is the authoritative theme — read the file, not this index.
 
-- **[WORKITEMS-1.7.2.md](WORKITEMS-1.7.2.md)** — **Current release.** Honest Gold tier flip (slipped from 1.7.1).
+- **[WORKITEMS-1.7.2.md](WORKITEMS-1.7.2.md)** — **Current release.** ESPHome 2026.7 support + polish (the Honest Gold tier flip + full i18n/German carried forward to 1.8).
 - **[WORKITEMS-1.8.md](WORKITEMS-1.8.md)** — LLM assistance.
 - **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — ESPHome dashboard parity.
 - **[WORKITEMS-future.md](WORKITEMS-future.md)** — Unscheduled backlog.
