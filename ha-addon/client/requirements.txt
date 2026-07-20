@@ -6,4 +6,4 @@ pydantic>=2.13.4
 # note in ``ha-addon/server/requirements.txt``.
 
 # Transitive of requests/aiohttp; floor bumped to clear PYSEC-2026-215 (fix in 3.15).
-idna>=3.15
+idna>=3.18
