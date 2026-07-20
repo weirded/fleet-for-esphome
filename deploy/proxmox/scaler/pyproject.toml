@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esphome-fleet-proxmox-scaler"
+version = "0.1.0"
+description = "Autoscale distributed-esphome build workers running as Proxmox LXC containers, driven by the Fleet server's queue depth."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "weirded" }]
+dependencies = [
+    "requests>=2.32,<3",
+    "proxmoxer>=2.0.1,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "pytest-mock>=3.12,<4",
+]
+
+[project.scripts]
+esphome-fleet-proxmox-scaler = "esphome_fleet_proxmox_scaler.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["esphome_fleet_proxmox_scaler*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

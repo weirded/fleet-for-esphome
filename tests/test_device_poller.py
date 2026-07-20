@@ -15,6 +15,20 @@ sys.modules.setdefault("zeroconf", MagicMock())
 sys.modules.setdefault("zeroconf.asyncio", MagicMock())
 sys.modules.setdefault("aioesphomeapi", MagicMock())
 _icmplib_stub = MagicMock()
+# SocketPermissionError must be a *real* exception subclass, not a bare
+# MagicMock attribute: both device_poller and ui_api do
+# `except SocketPermissionError`, and Python 3.13 raises TypeError
+# ("catching classes that do not inherit from BaseException is not allowed")
+# if the caught name isn't a BaseException subclass. Pre-2026.7 esphome
+# pulled real icmplib in transitively so this stub stayed dormant; esphome
+# 2026.7.0 dropped it (#240), activating the stub and exposing the gap.
+
+
+class _StubSocketPermissionError(Exception):
+    pass
+
+
+_icmplib_stub.SocketPermissionError = _StubSocketPermissionError
 sys.modules.setdefault("icmplib", _icmplib_stub)
 
 from device_poller import Device, DevicePoller

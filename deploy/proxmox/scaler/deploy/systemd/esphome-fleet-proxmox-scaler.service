@@ -1,0 +1,36 @@
+[Unit]
+Description=Fleet for ESPHome Proxmox LXC autoscaler
+Documentation=https://github.com/weirded/distributed-esphome/tree/main/deploy/proxmox/scaler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust paths to match your install. /opt/esphome-fleet-proxmox-scaler holds the
+# venv + the source; /etc/esphome-fleet-proxmox-scaler/config.env holds the
+# bearer tokens (mode 0600 owned by root or the scaler user).
+EnvironmentFile=/etc/esphome-fleet-proxmox-scaler/config.env
+ExecStart=/opt/esphome-fleet-proxmox-scaler/venv/bin/python -m esphome_fleet_proxmox_scaler
+Restart=on-failure
+RestartSec=10
+
+# Hardening — the scaler needs only outbound HTTPS + a stable hostname; nothing else.
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@resources @privileged
+
+[Install]
+WantedBy=multi-user.target

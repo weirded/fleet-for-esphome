@@ -1,0 +1,59 @@
+name: Proxmox scaler CI
+
+# Validates deploy/proxmox/scaler/ on every PR + push to develop/main:
+#   1. pip install (deps + dev extras)
+#   2. pytest (unit tests against mocked Fleet + Proxmox clients)
+#   3. shellcheck on the deploy/scripts/*.sh provisioning scripts
+#
+# Cheap (~30s); runs only when the scaler or its CI changes so server PRs
+# aren't slowed down. Does NOT publish; this workflow only validates.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/proxmox/scaler/**"
+      - ".github/workflows/proxmox-scaler-ci.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "deploy/proxmox/scaler/**"
+      - ".github/workflows/proxmox-scaler-ci.yml"
+
+concurrency:
+  group: proxmox-scaler-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: deploy/proxmox/scaler
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: deploy/proxmox/scaler/requirements.txt
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: pytest
+        run: pytest -ra
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: shellcheck provisioning scripts
+        # Pinned digest for ludeeus/action-shellcheck v2.0.0 (commit 00cae500b08a931fb5698e11e79bfbd38e612a38).
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38
+        with:
+          scandir: deploy/proxmox/scaler/deploy/scripts
+          severity: warning

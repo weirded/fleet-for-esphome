@@ -101,6 +101,15 @@ header img {
    action buttons or min-width tables. */
 html { overflow-x: hidden; }
 
+/* #145 — font-size scale. Tailwind v4's type ramp and most component
+   spacing units are rem-based, so shifting the root font-size scales
+   the whole UI proportionally without per-utility overrides. Default
+   html font-size is the browser default (16px) — 'normal' renders
+   byte-identical to pre-#145; 'small' drops to 87.5 %, 'large' climbs
+   to 112.5 %. Applied via [data-font-size] on <html> by App.tsx. */
+html[data-font-size='small'] { font-size: 87.5%; }
+html[data-font-size='large'] { font-size: 112.5%; }
+
 body {
   background: var(--bg);
   color: var(--text);

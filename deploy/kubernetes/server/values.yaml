@@ -1,0 +1,93 @@
+image:
+  repository: ghcr.io/weirded/esphome-dist-server
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+server:
+  # Bearer token shared by the server and every build worker. Set this OR
+  # existingSecret. The matching esphome-fleet-worker release must use the
+  # same token.
+  token: ""
+  existingSecret: ""
+  existingSecretTokenKey: SERVER_TOKEN
+  # Extra environment variables, appended verbatim to the container env.
+  extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 8765
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: esphome-fleet.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+persistence:
+  # /config/esphome — the ESPHome YAML config directory. The server keeps an
+  # on-disk git history of edits here, so it must survive pod restarts.
+  config:
+    enabled: true
+    storageClass: ""
+    size: 2Gi
+    accessModes:
+      - ReadWriteOnce
+    annotations: {}
+  # /data — job queue, settings, and the lazy-installed ESPHome version venvs.
+  data:
+    enabled: true
+    storageClass: ""
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    annotations: {}
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+# Non-root by default. fsGroup makes the mounted PVCs group-writable so the
+# non-root process can write /config/esphome and /data.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# Liveness/readiness probe both hit the unauthenticated server-info endpoint.
+# require_ha_auth defaults to off in standalone mode, so an unauthed probe is
+# the correct readiness signal.
+probePath: /ui/api/server-info
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+
+terminationGracePeriodSeconds: 60
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nameOverride: ""
+fullnameOverride: ""

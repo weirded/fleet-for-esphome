@@ -1,0 +1,65 @@
+suite: pvc
+templates:
+  - templates/pvc.yaml
+release:
+  name: fleet-worker
+  namespace: esphome-fleet
+tests:
+  - it: creates a PVC in fixed mode with persistence enabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      persistence.size: 5Gi
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: PersistentVolumeClaim
+      - equal:
+          path: metadata.name
+          value: fleet-worker-versions
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+      - contains:
+          path: spec.accessModes
+          content: ReadWriteOnce
+
+  - it: skips PVC when persistence disabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      persistence.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: skips PVC when autoscaling enabled (emptyDir mode)
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      autoscaling.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: storageClass dash means default-disabled
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      persistence.storageClass: "-"
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: ""
+
+  - it: explicit storageClass propagates
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      persistence.storageClass: nfs-rwo
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: nfs-rwo

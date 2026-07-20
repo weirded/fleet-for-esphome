@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.7.2
+
+**Newer ESPHome releases now compile.** ESPHome 2026.7.0 requires Python 3.12 or newer, but the add-on and its build workers still shipped on Python 3.11 — so every compile pinned to 2026.7.0 failed at the install step with "No matching distribution found," before any firmware was built. Even once that was cleared, ESP32 builds hit a second wall: 2026.7 replaced its build toolchain with a native ESP-IDF installer that needs a system library the image didn't carry, so ESP32 firmware still wouldn't compile. Both are fixed — the add-on now runs on Python 3.13 with the required libraries, and current and upcoming ESPHome versions install and compile normally across ESP32, ESP8266, RP2040, and LibreTiny targets. **Remote build workers must rebuild their Docker image** to pick up the new runtime — a worker still on the old image shows as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
+
+**Settings → Display → Font size.** New three-way picker (Small / Normal / Large) that scales the whole UI proportionally — tables, buttons, dialogs, and modals shrink or grow together rather than just body copy. Useful if you run Home Assistant at a non-100 % browser zoom and find Fleet's secondary text too small. Default stays at Normal so existing installs render byte-identical to 1.7.1.
+
+**Per-worker "Working" sensor.** Every build worker now exposes a `binary_sensor.fleet_<worker>_working` entity in Home Assistant alongside the existing `_online` sensor. The entity flips on while the worker has a compile in flight, so you can write automations like "stop the VSCode add-on while any worker is busy" — exposed as the building block rather than hard-coding any specific stop/start action. Generalises beyond VSCode to Frigate, NodeRED, AdGuard, or a dashboard warning card; mirrors HA's `BinarySensorDeviceClass.RUNNING` for the right icon and label.
+
+**Version dropdown — "Installable only" filter.** Both the header version dropdown and the Upgrade modal's version picker now offer a third filter alongside Show betas: **Installable only** (default ON) hides ESPHome versions older than 2023.7.0 — the floor below which `pip install esphome==X` is likely to fail on the current Python runtime. Untick to see the full PyPI catalogue. Pairs with 1.7.1's compile-with-old-versions fix.
+
+**Bug fixes.**
+
+- **Compiles no longer get stuck failing after the built-in worker frees disk space.** When the add-on's built-in worker trimmed its ESPHome version cache to stay within its disk budget, it could delete the very ESPHome version the server needs to prepare each build — after which every compile failed with a "Bundle creation failed" error and the queue stalled until the add-on was restarted. The server now reserves its active ESPHome version so the worker's cache cleanup leaves it alone, and transparently reinstalls it if it ever goes missing, so the build queue keeps running on its own.
+- **`wifi.use_address` set to a non-`.local` hostname is now honoured everywhere.** For a device reached by a corporate-DNS FQDN (e.g. a VPN'd device where mDNS doesn't reach Home Assistant), the address was respected by the Devices tab and the OTA network-diagnostics dump, but Live Logs and the OTA upload itself silently fell back to `<name>.local` and failed to connect. All four paths now resolve the address the same way.
+- **Standalone Docker workers no longer flap Offline during large ESPHome installs.** On the standalone (non-add-on) deployment with slower storage, the built-in worker could stall its own heartbeat while measuring disk usage after a big ESPHome install — long enough for the server to mark it offline and abandon the in-flight compile, then recover, in a loop. Disk measurement now runs on a background sampler so heartbeats keep flowing.
+
+**For integrators.**
+
+- **KEDA-compatible queue-depth metric.** New `GET /api/v1/metrics/queue` returns `{pending, working, active, online_workers, max_parallel_capacity, schema_version}` for external autoscalers (KEDA's `metrics-api` scaler, k8s HPA, Sablier, the in-tree Proxmox scaler). Bearer-auth via the existing `/api/v1/*` middleware — same worker token, read-only metric. Lets you spin workers up only when there's pending compile work and shut them down when idle.
+
+- **Helm chart for Kubernetes build workers.** A new chart under `deploy/kubernetes/` deploys build workers on Kubernetes and wires them to KEDA autoscaling off the queue-depth metric above — workers scale up when compile work is pending and down to zero when idle. Ships with a values schema, unit tests, and a README/design doc. (Community contribution.)
+
+**Under the hood.** The server and build-worker images move to Python 3.13. Groundwork for UI translations landed (an i18next foundation and a Settings language selector); actual translated locales will follow in a later release.
+
 ## 1.7.1
 
 A brand-refresh release.
@@ -243,7 +267,7 @@ The fleet management release. Schedule upgrades, pin device versions, and create
 - **Per-device version pinning** — pin individual devices to a specific ESPHome version. Bulk upgrades and scheduled runs respect the pin. The upgrade modal warns you when a one-off upgrade differs from a device's pin.
 - **Create devices from the UI** — "+ New Device" makes a new YAML from a stub; "Duplicate…" clones an existing device (preserving `!include`, `!secret`, and substitutions). Both open the editor on the new file. Cancelling without saving cleans up after itself.
 - **Unified Upgrade dialog** — one dialog handles "upgrade now" and "schedule for later" with a mode toggle.
-- **Searchable ESPHome version picker** ([#44](https://github.com/weirded/distributed-esphome/issues/44)) — both the header version dropdown and the Upgrade dialog now have a search box and list every historic ESPHome release from PyPI (no more 50-version cap). Beta versions are hidden by default with a "Show betas" toggle.
+- **Searchable ESPHome version picker** ([#44](https://github.com/weirded/fleet-for-esphome/issues/44)) — both the header version dropdown and the Upgrade dialog now have a search box and list every historic ESPHome release from PyPI (no more 50-version cap). Beta versions are hidden by default with a "Show betas" toggle.
 - **Home Assistant device deep-links** — the "Yes" indicator in the HA column is now a clickable link to the device's page in Home Assistant.
 - **Cancel and clear queue jobs** — cancelled jobs are now distinct from failed (gray "Cancelled" badge) and can be retried. New "Clear Entire Queue" option cancels everything in flight and clears all terminal jobs in one click.
 
@@ -266,7 +290,7 @@ The fleet management release. Schedule upgrades, pin device versions, and create
 - **Upgrade modal** — clicking Upgrade on a device opens a dialog where you can pick which worker should run the build and which ESPHome version to use. The version override is per-job only — it won't change your global default. Replaces the old "Upgrade on..." submenu.
 - **Queued follow-up compiles** — clicking Upgrade while a compile is already running for the same device queues exactly one follow-up that starts automatically when the current build finishes. It picks up the latest YAML at the time it starts, so you can edit → save → click Upgrade again without waiting. Re-clicking a third time updates the queued follow-up (worker, version) instead of piling up entries. The Queue tab shows a "Queued" badge on these follow-up jobs.
 - **Network columns on the Devices tab** — new toggleable columns show each device's network type (WiFi / Ethernet / Thread), IP mode (Static / DHCP), IPv6 status, Matter support, and whether a fallback access point is configured. The "Net" column is visible by default; the others can be toggled from the column picker.
-- **Upgrading indicator** ([#32](https://github.com/weirded/distributed-esphome/issues/32)) — an orange pulsing dot appears in the Status column while a device has a compile in flight, with live status text ("Compiling…", "OTA Retry", etc.) from the queue. No more wondering whether your Upgrade click registered.
+- **Upgrading indicator** ([#32](https://github.com/weirded/fleet-for-esphome/issues/32)) — an orange pulsing dot appears in the Status column while a device has a compile in flight, with live status text ("Compiling…", "OTA Retry", etc.) from the queue. No more wondering whether your Upgrade click registered.
 - **Save & Upgrade goes through the modal** — the editor's "Save & Upgrade" button now opens the same Upgrade dialog so you can pick a worker and version before triggering the build.
 - **Queue tab improvements** — new "Version" column shows the ESPHome version each job will compile against. A 📌 pushpin icon appears next to workers that were explicitly chosen in the Upgrade modal. Successful jobs show a green "Rerun" button instead of the amber "Retry".
 - **HA-confirmed unmanaged devices** — devices discovered via mDNS that don't have a YAML config but ARE known to Home Assistant now show "in HA" under the IP and "Yes" in the HA column, so you can tell real ESPHome devices from stray mDNS broadcasts.
@@ -284,10 +308,10 @@ The fleet management release. Schedule upgrades, pin device versions, and create
 
 **Bug fixes**
 
-- [#25](https://github.com/weirded/distributed-esphome/issues/25) — UI didn't load on HAOS with 1.3.0 (startup blocked on Supervisor API + poller tight-retry loop).
-- [#27](https://github.com/weirded/distributed-esphome/issues/27) — Divider line between managed and unmanaged devices disappeared on toggle.
-- [#31](https://github.com/weirded/distributed-esphome/issues/31) — "Upgrade on..." submenu overflowed with long hostnames and closed when moving the mouse to it.
-- [#6](https://github.com/weirded/distributed-esphome/issues/6) — Intermittent `Failed to install Python dependencies into penv` on ARM Mac workers (increased network timeouts for uv/pip).
+- [#25](https://github.com/weirded/fleet-for-esphome/issues/25) — UI didn't load on HAOS with 1.3.0 (startup blocked on Supervisor API + poller tight-retry loop).
+- [#27](https://github.com/weirded/fleet-for-esphome/issues/27) — Divider line between managed and unmanaged devices disappeared on toggle.
+- [#31](https://github.com/weirded/fleet-for-esphome/issues/31) — "Upgrade on..." submenu overflowed with long hostnames and closed when moving the mouse to it.
+- [#6](https://github.com/weirded/fleet-for-esphome/issues/6) — Intermittent `Failed to install Python dependencies into penv` on ARM Mac workers (increased network timeouts for uv/pip).
 - Restart endpoint no longer silently reports success when the device has no restart button — it returns a clear error with the candidates it tried.
 - A corrupted `queue.json` entry no longer crashes the server at startup — the bad entry is skipped and logged.
 - Matter/Thread devices with both `wifi:` and `openthread:` blocks are now correctly detected as Thread (was incorrectly picking WiFi due to block-order precedence).
@@ -312,7 +336,7 @@ Theme: **Quality + Testing.** Mostly internal hardening to prevent regressions a
 - CI also runs ruff lint, mypy on server + client, pytest with coverage reporting, frontend build, and Playwright tests on every push.
 - Docker images now also published from `develop` (`ghcr.io/weirded/esphome-dist-{client,server}:develop`) so users can test unreleased changes without rebuilding locally. `:latest` stays pinned to `main`.
 
-**Worker image versioning** ([#16](https://github.com/weirded/distributed-esphome/issues/16))
+**Worker image versioning** ([#16](https://github.com/weirded/fleet-for-esphome/issues/16))
 - Workers now report a Docker `IMAGE_VERSION` separate from the source code version. The server enforces a `MIN_IMAGE_VERSION` and refuses source-code auto-updates to workers running a stale image (since they'd just exec into a broken state).
 - Workers tab shows a red "image stale" badge next to outdated workers, clickable to open the Connect Worker modal with the latest `docker run` command.
 
@@ -320,10 +344,10 @@ Theme: **Quality + Testing.** Mostly internal hardening to prevent regressions a
 - Worker system info (memory, CPU usage, disk) now comes from psutil instead of hand-rolled `/proc` parsing. Cross-platform (Windows works as a bonus) and more accurate CPU utilization.
 
 **Bug fixes**
-- Fixed duplicate device rows for Thread-only and statically-IP'd devices ([#2](https://github.com/weirded/distributed-esphome/issues/2)). The scanner now resolves addresses through ESPHome's full `wifi → ethernet → openthread` precedence chain (each honoring `use_address` → `manual_ip.static_ip` → `{name}.local`), and the device poller correctly handles IPv6 mDNS records and merges discovery into existing YAML-derived rows by normalized name.
-- Fixed `esphome run` prompting interactively when the worker host has multiple upload targets ([#22](https://github.com/weirded/distributed-esphome/issues/22)). The `--device` flag is now always passed (using the literal `"OTA"` when no specific address is known) so ESPHome never blocks waiting for stdin.
-- Fixed OTA-only retries crashing with `unrecognized arguments: --no-logs` ([#21](https://github.com/weirded/distributed-esphome/issues/21)). `esphome upload` doesn't accept that flag — only `esphome run` does. The retry path now invokes `upload` without it.
-- Fixed streamer mode not blurring IPs on unmanaged devices ([#19](https://github.com/weirded/distributed-esphome/issues/19)).
+- Fixed duplicate device rows for Thread-only and statically-IP'd devices ([#2](https://github.com/weirded/fleet-for-esphome/issues/2)). The scanner now resolves addresses through ESPHome's full `wifi → ethernet → openthread` precedence chain (each honoring `use_address` → `manual_ip.static_ip` → `{name}.local`), and the device poller correctly handles IPv6 mDNS records and merges discovery into existing YAML-derived rows by normalized name.
+- Fixed `esphome run` prompting interactively when the worker host has multiple upload targets ([#22](https://github.com/weirded/fleet-for-esphome/issues/22)). The `--device` flag is now always passed (using the literal `"OTA"` when no specific address is known) so ESPHome never blocks waiting for stdin.
+- Fixed OTA-only retries crashing with `unrecognized arguments: --no-logs` ([#21](https://github.com/weirded/fleet-for-esphome/issues/21)). `esphome upload` doesn't accept that flag — only `esphome run` does. The retry path now invokes `upload` without it.
+- Fixed streamer mode not blurring IPs on unmanaged devices ([#19](https://github.com/weirded/fleet-for-esphome/issues/19)).
 - Fixed Workers tab showing "up 5m" for offline workers based on stale process uptime. Now shows "offline for Xm" using the last heartbeat timestamp.
 - Fixed queue duration showing the worker's compile time instead of wall-clock time. Now `Took 2m 14s` from enqueue to finish, and `Elapsed 45s` for in-progress jobs.
 - Fixed queue sort defaulting to time instead of state — running jobs are now back at the top by default.
@@ -355,16 +379,16 @@ Theme: **Quality + Testing.** Mostly internal hardening to prevent regressions a
 
 ## 1.2.0
 
-**Built-in Local Worker** ([#4](https://github.com/weirded/distributed-esphome/issues/4))
+**Built-in Local Worker** ([#4](https://github.com/weirded/fleet-for-esphome/issues/4))
 - The add-on now includes a built-in build worker — no external Docker container required to get started
 - Starts paused (0 slots); increase via the Workers tab to activate
 - Great for HaOS setups where adding Docker containers is difficult
 
-**Choose Which Worker Compiles** ([#5](https://github.com/weirded/distributed-esphome/issues/5))
+**Choose Which Worker Compiles** ([#5](https://github.com/weirded/fleet-for-esphome/issues/5))
 - New "Upgrade on..." submenu in the device menu lets you pin a compile job to a specific worker
 - Useful for debugging or when certain configs only work on specific hardware
 
-**Docker Compose Support** ([#8](https://github.com/weirded/distributed-esphome/issues/8))
+**Docker Compose Support** ([#8](https://github.com/weirded/fleet-for-esphome/issues/8))
 - Added `docker-compose.worker.yml` for easy worker deployment
 
 **Configurable Device Columns**

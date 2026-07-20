@@ -1,9 +1,9 @@
-aiohttp>=3.9
-pydantic>=2.13.3
-croniter>=6.2.2
+aiohttp>=3.14.1
+pydantic>=2.13.4
+croniter>=6.2.3
 apscheduler>=3.11.2,<4
-aioesphomeapi>=44.22.0
-zeroconf>=0.131
+aioesphomeapi>=45.5.2
+zeroconf>=0.150.0
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
 # boot, scanner.ensure_esphome_installed lazy-installs the HA ESPHome
@@ -11,8 +11,8 @@ pyyaml>=6.0.3
 # VersionManager. This eliminates #51 (bundle upgrade friction) + #56
 # (macOS-only transitives leaking in) + #20 (upstream API changes
 # invisible until re-bump) in one go. The image is ~200 MB smaller.
-requests>=2.31
-icmplib>=3.0
+requests>=2.34.2
+icmplib>=3.0.4
 # #108 briefly added py-spy here for external `docker exec` thread
 # dumps. #189 replaced the py-spy path with an in-process frame walk
 # (``diagnostics.in_process_thread_dump``) that works inside every
@@ -20,3 +20,6 @@ icmplib>=3.0
 # removed to save ~5 MB/image. ``scripts/threaddump-addon.sh`` still
 # ``pip install py-spy`` inside its own throwaway sidecar for the
 # deadlocked-interpreter edge case, so that path is unaffected.
+
+# Transitive of requests/aiohttp; floor bumped to clear PYSEC-2026-215 (fix in 3.15).
+idna>=3.15

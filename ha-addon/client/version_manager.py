@@ -37,6 +37,54 @@ if (
 # Minimum free disk percentage before we start evicting versions
 MIN_FREE_DISK_PCT = int(os.environ.get("MIN_FREE_DISK_PCT", "10"))
 
+# #119 (round 2): the in-container local worker shares
+# ``/data/esphome-versions/`` with the server's lazy-installed bundling
+# venv (see ``main.py``'s ``ESPHOME_VERSIONS_DIR=/data/esphome-versions``
+# in the local-worker spawn). The worker never *runs a job* on the
+# server's selected version, so from the worker's LRU / disk-quota point
+# of view that venv looks idle and gets evicted first — which deletes the
+# exact venv ``scanner.create_bundle`` shells into. Every subsequent
+# bundle then fails with ``FileNotFoundError: '.../bin/python'`` until the
+# add-on restarts (the original #119 symptom; that fix only covered the
+# Clean-Cache path, not LRU / disk-quota eviction).
+#
+# The server publishes its active version to this sentinel file in the
+# shared dir; every worker eviction path treats those versions as pinned.
+# Remote workers (own dir, no sentinel) read an empty set — no change.
+SERVER_ACTIVE_VERSION_FILE = ".server-active-version"
+
+
+def read_server_active_versions(base: Path) -> set[str]:
+    """Versions the server has pinned as its active bundling venv(s).
+
+    Returns an empty set when the sentinel is absent/unreadable (the
+    common case for remote workers with their own versions dir).
+    """
+    try:
+        raw = (Path(base) / SERVER_ACTIVE_VERSION_FILE).read_text()
+    except OSError:
+        return set()
+    return {line.strip() for line in raw.splitlines() if line.strip()}
+
+
+def write_server_active_version(base: Path, version: str) -> None:
+    """Publish *version* as the server's active bundling venv.
+
+    Best-effort: a write failure just means the worker may evict the
+    venv and the server self-heals by reinstalling (see
+    ``scanner.create_bundle``). Never raises.
+    """
+    try:
+        base = Path(base)
+        base.mkdir(parents=True, exist_ok=True)
+        (base / SERVER_ACTIVE_VERSION_FILE).write_text(version + "\n")
+    except OSError:
+        logger.warning(
+            "Could not write %s sentinel under %s; local worker may evict "
+            "the server's bundling venv (server will self-heal)",
+            SERVER_ACTIVE_VERSION_FILE, base, exc_info=True,
+        )
+
 
 class VersionManager:
     """
@@ -94,10 +142,13 @@ class VersionManager:
 
         Must be called with self._lock held.
         Skips *keep_version* if provided (the version about to be installed).
-        Returns True if a version was evicted, False if nothing to evict.
+        Skips versions the server has pinned as its active bundling venv
+        (#119 round 2 — never evict the shared dir's server venv).
+        Returns True if a version was evicted, False if nothing evictable.
         """
+        protected = read_server_active_versions(self._base)
         for version, path in self._lru.items():
-            if version == keep_version:
+            if version == keep_version or version in protected:
                 continue
             logger.info("Evicting ESPHome version %s from %s", version, path)
             try:
@@ -250,7 +301,12 @@ class VersionManager:
                 else:
                     # We'll do the install; evict if at capacity
                     while len(self._lru) >= self._max_versions:
-                        self._evict_lru(keep_version=version)
+                        # _evict_lru returns False once only protected /
+                        # keep versions remain — stop then so we don't spin
+                        # forever (the server's pinned venv legitimately
+                        # keeps us above max_versions).
+                        if not self._evict_lru(keep_version=version):
+                            break
                     # Also evict if disk is low
                     self._ensure_disk_space(keep_version=version)
                     install_event = threading.Event()

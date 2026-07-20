@@ -1,0 +1,81 @@
+image:
+  repository: ghcr.io/weirded/esphome-dist-client
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+server:
+  url: ""
+  token: ""
+  existingSecret: ""
+  existingSecretTokenKey: SERVER_TOKEN
+
+worker:
+  tags:
+    - k8s
+    - "os:linux"
+  tagsOverwrite: false
+  maxParallelJobs: 2
+  diskQuotaGb: 0
+  minFreeDiskPct: 10
+  # Defaults to 1s here (vs the 5s worker default elsewhere) because under
+  # KEDA autoscaling a freshly-launched replica should claim a queued job
+  # within the same cooldown window the autoscaler used to spawn it — a 5s
+  # poll wastes a meaningful fraction of that window on idle pods. The
+  # server's /jobs/next is cheap; the extra request rate is negligible.
+  pollInterval: 1
+  heartbeatInterval: 10
+  jobTimeout: 600
+  otaTimeout: 120
+  extraEnv: []
+
+autoscaling:
+  enabled: false
+  # Baseline replica count and the single always-on knob — there is no
+  # separate `replicas` value. When autoscaling.enabled is false this is the
+  # fixed Deployment replica count; when true it is KEDA's scale-to floor.
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  cooldownPeriod: 600
+  pollingInterval: 30
+  targetQueueSize: 2
+  metricsApi:
+    insecureTLSSkipVerify: false
+
+persistence:
+  enabled: true
+  storageClass: ""
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+hostNetwork: false
+dnsPolicy: ""
+priorityClassName: ""
+
+podLabels: {}
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+
+terminationGracePeriodSeconds: 600
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nameOverride: ""
+fullnameOverride: ""

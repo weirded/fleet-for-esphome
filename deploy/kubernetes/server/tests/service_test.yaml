@@ -1,0 +1,33 @@
+suite: service
+templates:
+  - templates/service.yaml
+release:
+  name: fleet-server
+  namespace: esphome-fleet
+tests:
+  - it: serves on port 8765 by default
+    set:
+      server.token: tok
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 8765
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: honors a custom service type and port
+    set:
+      server.token: tok
+      service.type: LoadBalancer
+      service.port: 9000
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports[0].port
+          value: 9000

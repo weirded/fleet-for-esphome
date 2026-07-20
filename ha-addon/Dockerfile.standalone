@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Match ha-addon/Dockerfile's apt layer. `git` is load-bearing for the
 # server's git_versioning module (on-disk history of config edits);
@@ -7,7 +7,12 @@ FROM python:3.11-slim
 # dropped from history. Exposed by HT.14 — bug #104.
 # `iputils-ping` keeps the server-spawned local worker's OTA network-
 # diagnostics probe functional, same as the add-on image (bug #6).
-RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping && rm -rf /var/lib/apt/lists/*
+# #240 (ESPHome 2026.7): the new native ESP-IDF toolchain (replacing
+# PlatformIO for ESP32) downloads openocd-esp32 and *verifies it by
+# executing it* during framework install; openocd links libusb-1.0.so.0,
+# so without `libusb-1.0-0` the verify exits 127 and the whole ESP-IDF
+# install fails -> every ESP32 compile dies.
+RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping libusb-1.0-0 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY server/requirements.txt .

@@ -1,0 +1,132 @@
+{{- /*
+  Preflight validation — fails at render time so a misconfigured install
+  fails fast instead of producing a pod that can never start.
+*/ -}}
+{{- if and (not .Values.server.token) (not .Values.server.existingSecret) -}}
+{{- fail "esphome-fleet-server: either server.token or server.existingSecret must be set (the server requires SERVER_TOKEN at startup)" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "esphome-fleet-server.fullname" . }}
+  labels:
+    {{- include "esphome-fleet-server.labels" . | nindent 4 }}
+spec:
+  # Singleton: the server owns RWO PVCs for /config/esphome and /data, which
+  # cannot multi-attach. Recreate (not RollingUpdate) tears the old pod down
+  # before the new one starts so the volumes are free to re-attach.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "esphome-fleet-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "esphome-fleet-server.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "esphome-fleet-server.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      containers:
+        - name: server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: HA_MODE
+              value: standalone
+            - name: SERVER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "esphome-fleet-server.secretName" . }}
+                  key: {{ include "esphome-fleet-server.secretTokenKey" . }}
+            # Keep uv's package cache off the (non-root) rootfs and on a
+            # writable tmpfs path so ESPHome version installs work.
+            - name: UV_CACHE_DIR
+              value: /tmp/.uv
+            # The server keeps a git history of /config/esphome edits. When
+            # the PVC is owned by a different uid than the non-root process,
+            # git refuses with "dubious ownership"; mark the dir safe. The
+            # value is single-quoted because git's GIT_CONFIG_PARAMETERS
+            # format requires each parameter to be quoted.
+            - name: GIT_CONFIG_PARAMETERS
+              value: "'safe.directory=/config/esphome'"
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8765
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probePath }}
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probePath }}
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /config/esphome
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          {{- if .Values.persistence.config.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "esphome-fleet-server.fullname" . }}-config
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: data
+          {{- if .Values.persistence.data.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "esphome-fleet-server.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

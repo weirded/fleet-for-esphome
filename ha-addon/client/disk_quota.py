@@ -46,6 +46,7 @@ import logging
 import os
 import shutil
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,7 @@ class Usage:
     slot_bytes: int = 0
     pio_slot_bytes: int = 0
     other_bytes: int = 0
+    truncated: bool = False  # #144: set when a deadline-bounded walk gave up early
 
     @property
     def total_bytes(self) -> int:
@@ -155,14 +157,24 @@ class ActiveJobSet:
 # ---------------------------------------------------------------------------
 
 
-def _du_bytes(path: Path) -> int:
-    """Recursive sum of file sizes under ``path``."""
+def _du_bytes(path: Path, deadline: Optional[float] = None) -> int:
+    """Recursive sum of file sizes under ``path``.
+
+    ``deadline`` is a :func:`time.monotonic` timestamp; when set and
+    exceeded, the walk stops early and returns whatever has been summed
+    so far. The caller (:func:`compute_usage`) detects truncation by
+    checking the clock after the walk and surfaces it via
+    :attr:`Usage.truncated`. Bounding the walk this way keeps slow /
+    NFS-mounted bases from parking the heartbeat thread (#144).
+    """
     total = 0
     try:
         for entry in os.scandir(path):
+            if deadline is not None and time.monotonic() > deadline:
+                break
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    total += _du_bytes(Path(entry.path))
+                    total += _du_bytes(Path(entry.path), deadline=deadline)
                 elif entry.is_file(follow_symlinks=False):
                     try:
                         total += entry.stat(follow_symlinks=False).st_size
@@ -287,12 +299,24 @@ def _rmtree(path: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def compute_usage(base: Path) -> Usage:
-    """Walk ``base`` once, attributing bytes to a category."""
+def compute_usage(base: Path, deadline_s: Optional[float] = None) -> Usage:
+    """Walk ``base`` once, attributing bytes to a category.
+
+    ``deadline_s`` (seconds) caps the wall-clock cost of the walk; when
+    exceeded, returns a partial :class:`Usage` with ``truncated=True``.
+    Eviction-loop callers (:func:`enforce_quota`'s ``should_stop``) must
+    pass ``None`` so the comparison against the quota stays accurate;
+    sampling/diagnostic callers should pass a budget so a slow ``base``
+    can't park the calling thread (#144).
+    """
     u = Usage()
     if not base.exists():
         return u
+    deadline = (time.monotonic() + deadline_s) if deadline_s is not None else None
     for entry in base.iterdir():
+        if deadline is not None and time.monotonic() > deadline:
+            u.truncated = True
+            return u
         try:
             if entry.is_file():
                 try:
@@ -306,15 +330,17 @@ def compute_usage(base: Path) -> Usage:
             continue
         name = entry.name
         if _is_venv_dir(entry):
-            u.venv_bytes += _du_bytes(entry)
+            u.venv_bytes += _du_bytes(entry, deadline=deadline)
         elif name == "cache":
-            u.cache_bytes += _du_bytes(entry)
+            u.cache_bytes += _du_bytes(entry, deadline=deadline)
         elif name == "slots":
-            u.slot_bytes += _du_bytes(entry)
+            u.slot_bytes += _du_bytes(entry, deadline=deadline)
         elif name.startswith("pio-slot-"):
-            u.pio_slot_bytes += _du_bytes(entry)
+            u.pio_slot_bytes += _du_bytes(entry, deadline=deadline)
         else:
-            u.other_bytes += _du_bytes(entry)
+            u.other_bytes += _du_bytes(entry, deadline=deadline)
+    if deadline is not None and time.monotonic() > deadline:
+        u.truncated = True
     return u
 
 

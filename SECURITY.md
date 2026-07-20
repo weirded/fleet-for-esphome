@@ -4,15 +4,15 @@
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.7.1    | ✅ Current release  |
-| 1.7.0    | ✅ Previous stable — security fixes only if trivially backportable |
-| < 1.7.0  | ❌ No patches       |
+| 1.7.2    | ✅ Current release  |
+| 1.7.1    | ✅ Previous stable — security fixes only if trivially backportable |
+| < 1.7.1  | ❌ No patches       |
 
 *(Note: the 1.5 release was developed as `1.4.1-dev.N` through dev.72 and renumbered late cycle as scope grew beyond a patch release. Docker tags with the `1.4.1-dev.N` stamp remain pullable from GHCR but are superseded by the 1.5.x stable tags.)*
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please [open a GitHub issue](https://github.com/weirded/distributed-esphome/issues/new) with:
+If you discover a security vulnerability, please [open a GitHub issue](https://github.com/weirded/fleet-for-esphome/issues/new) with:
 
 - A description of the vulnerability
 - Steps to reproduce
@@ -44,7 +44,7 @@ The stated threat model is a **trusted home network** behind Home Assistant's In
 - **Cosign-signed GHCR images** (keyless / GitHub OIDC) — verify with:
   ```bash
   cosign verify \
-    --certificate-identity-regexp 'https://github.com/weirded/distributed-esphome/.github/workflows/publish-.*\.yml@.*' \
+    --certificate-identity-regexp 'https://github.com/weirded/fleet-for-esphome/.github/workflows/publish-.*\.yml@.*' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     ghcr.io/weirded/esphome-dist-client:latest
   ```
@@ -102,12 +102,12 @@ These are accepted risks within the home-network threat model; see the full audi
 
 All 21 audit findings are now FIXED, WONTFIX-by-threat-model, or marked INFO. Cycle deltas for 1.7.1 (no F-* status flips):
 
-- **Brand rebrand — metadata-only at the network/auth layer.** *"ESPHome Fleet"* (1.5.0–1.7.0) renamed to **Fleet for ESPHome**. Verified pre-flip in WORKITEMS-1.7.1 BR.1 sub-bullet 12: code identifiers (add-on slug, integration domain, GHCR image names, mDNS service type, Bearer-realm consumers, all `esphome_fleet.*` HA service names) keep their existing forms. No migration on existing installs; no trust-boundary change. <!-- br1-allow: rebrand chronology -->
+- **Brand rebrand — metadata-only at the network/auth layer.** *"ESPHome Fleet"* (1.5.0–1.7.0) renamed to **Fleet for ESPHome**. Verified pre-flip in `dev-plans/archive/WORKITEMS-1.7.1.md` BR.1 sub-bullet 12: code identifiers (add-on slug, integration domain, GHCR image names, mDNS service type, Bearer-realm consumers, all `esphome_fleet.*` HA service names) keep their existing forms. No migration on existing installs; no trust-boundary change. <!-- br1-allow: rebrand chronology -->
 - **Legacy full-config-dir bundle path (#131).** Lifted the install-time refusal of ESPHome <2026.4. The server's `create_bundle` now branches on the *server*'s installed ESPHome version: ≥2026.4 keeps the validated, target-scoped `ConfigBundleCreator` subprocess; <2026.4 falls back to a deterministic full-config-dir tar (mirrors the pre-1.6.2 layout). Trade-off: the legacy path ships every device's `secrets.yaml` and every other device's YAML to the worker — see the bullet under "What is *not* in scope" above. Per-job ESPHome version selection is independent of the server's bundling version (the server's *active* venv decides bundle shape; the *job*'s pinned version decides what the worker compiles with), so an operator who keeps the server on 2026.4+ retains the scoped bundle even when individual targets compile against older releases.
 - **Quieter device polling (#238).** Pre-1.7.1 the add-on opened a fresh `aioesphomeapi` connection to every known device every 60 s. The new default reads steady-state liveness from mDNS announcements (which already carry `version` in the TXT record) and only opens an API connection on first sight of a new device or right after a Fleet-driven OTA. Reduces the add-on's egress footprint inside the LAN by ~60×. New `device_native_api_poll` Setting (default OFF) restores the old behaviour for users diagnosing a flaky device. Defensive only.
 - **Worker eligibility-check error handling (#234).** `GET /api/v1/jobs/next` now wraps the per-worker eligibility check in a try/except that logs the traceback at WARNING with `client_id` and falls through to HTTP 204 instead of bubbling a HTTP 500. Closes a DoS-by-stupidity loop where a single misformatted worker would lock-loop the server with 500s while never claiming a job. Same trust tier; defensive only.
 - **Server-side firmware-upload grace window (#236).** `POST /api/v1/jobs/{id}/firmware/{variant}` accepts a 60-second grace past `finished_at` for the still-assigned worker only (other workers' uploads on a finished job continue to be rejected via `client_id` lookup). Logged at INFO. Closes a worker-side race where slow variant uploads after the OTA succeeded would land just after the timeout-checker flipped the job to FAILED. Not a trust-boundary change.
-- **Dependabot alerts at release time:** two open HIGH alerts on `fast-uri` (#10 / #14) — transitive of the *dev-only* `shadcn` CLI → `@modelcontextprotocol/sdk` → `ajv`. Never reaches production bundles (Vite-built UI does not import `shadcn` at runtime). Upstream advisories list `first_patched_version: null` — nothing to upgrade to. Tracked as `fast-uri-DEV` WONTFIX in `WORKITEMS-1.7.1.md`; re-evaluate next release.
+- **Dependabot alerts at release time:** two open HIGH alerts on `fast-uri` (#10 / #14) — transitive of the *dev-only* `shadcn` CLI → `@modelcontextprotocol/sdk` → `ajv`. Never reaches production bundles (Vite-built UI does not import `shadcn` at runtime). Upstream advisories list `first_patched_version: null` — nothing to upgrade to. Tracked as `fast-uri-DEV` WONTFIX in `dev-plans/archive/WORKITEMS-1.7.1.md`; re-evaluate next release.
 
 Cycle deltas for 1.7.0 (no F-* status flips):
 
@@ -126,7 +126,7 @@ Cycle deltas for 1.6.2:
 
 Cycle deltas for 1.6.1:
 
-- **F-13 (Docker base image digest pinning)** moved OPEN → **FIXED (partial)** via SS.4. Worker Dockerfile pins `python:3.11-slim@sha256:…`; server Dockerfile pins the `ARG BUILD_FROM` default digest. Supervisor's production build path still can't carry a digest (upstream `build_from` regex rejects `@sha256:…`); partial until that's relaxed.
+- **F-13 (Docker base image digest pinning)** moved OPEN → **FIXED (partial)** via SS.4. Worker Dockerfile pins `python:3.13-slim@sha256:…`; server Dockerfile pins the `ARG BUILD_FROM` default digest. Supervisor's production build path still can't carry a digest (upstream `build_from` regex rejects `@sha256:…`); partial until that's relaxed.
 - **F-18 (worker pip install hash-pinning)** was marked FIXED (partial) in 1.5.0 via SC.3, then re-assessed and marked **WONTFIX** in 1.6.1: the single-version constraints file we committed rarely matched the version actually requested at job time (users routinely pin older ESPHome versions or track newer releases than we'd had time to generate constraints for), so the hardened `--require-hashes` path's hit rate in practice was ~0% and the fallback-to-unpinned-install behavior was the load-bearing case. See §F-18 in the audit for the full re-assessment.
 - **F-21 (add-on ran unconfined)** added and immediately **FIXED** in the same cycle via SS.1 — AppArmor profile attached, Supervisor runs the container under confinement.
 

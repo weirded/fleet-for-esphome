@@ -31,7 +31,7 @@
 #   STANDALONE_TOKEN_FILE  local token cache  (default ~/.config/distributed-esphome/standalone-token)
 #   TAG                    ghcr tag           (default develop)
 #   FLEET_SOURCE_HOST      fleet src          (default hass-4)
-#   ESPHOME_VERSION        pinned version     (default 2026.4.5)
+#   ESPHOME_VERSION        pinned version     (default 2026.7.0)
 #   SKIP_TEARDOWN          set to 1 to reuse existing state
 #   SKIP_INSTALL           set to 1 to skip deploy.sh
 #   SKIP_BOOTSTRAP         set to 1 to skip esphome install

@@ -235,9 +235,29 @@ export function UpgradeModal({
   // #64: searchable + beta-filterable version list
   const [versionSearch, setVersionSearch] = useState('');
   const [showBetas, setShowBetas] = useState(false);
+  // #131 sub-bullet 4: hide ESPHome versions that won't pip install on
+  // the current Python runtime. Floor mirrors EsphomeVersionDropdown.
+  const [installableOnly, setInstallableOnly] = useState(true);
+  const INSTALLABLE_FLOOR = '2023.7.0';
   const isBeta = (v: string) => /\d(a|b|rc|dev)\d/i.test(v);
+  const compareVersion = (a: string, b: string): number => {
+    const parse = (v: string): number[] => {
+      const base = v.split(/[a-z]/i)[0];
+      return base.split('.').map(p => parseInt(p, 10) || 0);
+    };
+    const av = parse(a);
+    const bv = parse(b);
+    const len = Math.max(av.length, bv.length);
+    for (let i = 0; i < len; i++) {
+      const diff = (av[i] ?? 0) - (bv[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  };
+  const isInstallable = (v: string) => compareVersion(v, INSTALLABLE_FLOOR) >= 0;
   const filteredVersions = versionList.filter(v => {
     if (!showBetas && isBeta(v)) return false;
+    if (installableOnly && !isInstallable(v)) return false;
     if (versionSearch && !v.toLowerCase().includes(versionSearch.toLowerCase())) return false;
     return true;
   });
@@ -639,6 +659,13 @@ export function UpgradeModal({
                     <label className="flex items-center gap-1.5 mt-1 text-[11px] text-[var(--text-muted)] cursor-pointer">
                       <input type="checkbox" checked={showBetas} onChange={e => setShowBetas(e.target.checked)} />
                       Show betas
+                    </label>
+                    <label
+                      className="flex items-center gap-1.5 mt-1 text-[11px] text-[var(--text-muted)] cursor-pointer"
+                      title={`Hides ESPHome versions older than ${INSTALLABLE_FLOOR} that won't pip install on the current Python runtime.`}
+                    >
+                      <input type="checkbox" checked={installableOnly} onChange={e => setInstallableOnly(e.target.checked)} />
+                      Installable only
                     </label>
                   </div>
                 )}

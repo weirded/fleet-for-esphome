@@ -236,6 +236,37 @@ export function SettingsDrawer({ open, onOpenChange, dirtyTargets = [], onReques
                   ]}
                   onCommit={v => patch({ date_format: v as 'auto' | 'iso' | 'us' | 'eu' | 'long' })}
                 />
+                {/* I18N.2 (#141) — UI language. 'auto' follows the
+                    browser's preferred locale (`navigator.language`);
+                    explicit values override. At I18N.2 the catalogs
+                    are still empty, so every value renders the same
+                    English literals — picking Deutsch becomes
+                    visible once I18N.4/I18N.9 land. */}
+                <EnumRow
+                  label="Language"
+                  help="Interface language. Translations land progressively across 1.7.2."
+                  value={data.language}
+                  options={[
+                    { value: 'auto', label: 'Auto (follow browser locale)' },
+                    { value: 'en', label: 'English' },
+                    { value: 'de', label: 'Deutsch' },
+                  ]}
+                  onCommit={v => patch({ language: v as 'auto' | 'en' | 'de' })}
+                />
+                {/* #145 — font size scale. 'normal' is byte-identical to
+                    pre-#145; 'small' fits the UI to a sub-100 % browser
+                    zoom; 'large' is the accessibility step up. */}
+                <EnumRow
+                  label="Font size"
+                  help="Scales the whole UI proportionally. Pick Small if you run Home Assistant at a lower browser zoom."
+                  value={data.font_size}
+                  options={[
+                    { value: 'small', label: 'Small' },
+                    { value: 'normal', label: 'Normal' },
+                    { value: 'large', label: 'Large' },
+                  ]}
+                  onCommit={v => patch({ font_size: v as 'small' | 'normal' | 'large' })}
+                />
               </Section>
               </>}
               {activeTab === 'advanced' && <>

@@ -1,0 +1,15 @@
+services:
+  scaler:
+    build: .
+    image: esphome-fleet-proxmox-scaler:local
+    container_name: esphome-fleet-proxmox-scaler
+    restart: unless-stopped
+    env_file:
+      - config.env
+    # No exposed ports — scaler is outbound-only (Fleet API + Proxmox API).
+    # No mounts — config + secrets come from env_file.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import esphome_fleet_proxmox_scaler"]
+      interval: 1m
+      timeout: 5s
+      retries: 3

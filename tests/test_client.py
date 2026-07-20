@@ -117,6 +117,64 @@ def test_eviction_respects_lru_order(tmp_path):
     assert evicted[0] == "v2", f"Expected v2 to be evicted, got {evicted}"
 
 
+def test_eviction_preserves_server_active_version(tmp_path):
+    """#119 (round 2): the shared-dir local worker must never evict the
+    venv the server published as its active bundling venv.
+
+    Regression: without the sentinel pin, installing a new version with
+    MAX_ESPHOME_VERSIONS=1 evicted the server's selected venv, leaving
+    scanner._server_esphome_bin dangling and every bundle failing with
+    FileNotFoundError until the add-on restarted.
+    """
+    import os
+
+    from version_manager import write_server_active_version
+
+    # Server-active venv (oldest mtime → first eviction candidate).
+    _add_fake_version(tmp_path, "2025.11.0")
+    _add_fake_version(tmp_path, "2026.1.0")
+    # Force a deterministic LRU order: server-active is least-recent.
+    os.utime(tmp_path / "2025.11.0", (1.0, 1.0))
+    os.utime(tmp_path / "2026.1.0", (2.0, 2.0))
+
+    write_server_active_version(tmp_path, "2025.11.0")
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=1)
+    with patch.object(vm, "_install", side_effect=lambda v: _add_fake_version(tmp_path, v)):
+        vm.ensure_version("2026.5.1")
+
+    remaining = vm.installed_versions()
+    assert "2025.11.0" in remaining, "server-active venv must survive eviction"
+    assert "2026.5.1" in remaining, "newly-installed version present"
+    assert "2026.1.0" not in remaining, "unprotected old venv evicted"
+
+
+def test_eviction_no_infinite_loop_when_only_protected_remain(tmp_path):
+    """When every evictable venv is server-pinned, the install eviction
+    loop must terminate (and exceed max_versions) rather than spin."""
+    from version_manager import write_server_active_version
+
+    _add_fake_version(tmp_path, "2025.11.0")
+    write_server_active_version(tmp_path, "2025.11.0")
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=1)
+    with patch.object(vm, "_install", side_effect=lambda v: _add_fake_version(tmp_path, v)):
+        # Must return (no hang) even though the only existing venv is pinned
+        # and we're already at max_versions.
+        vm.ensure_version("2026.5.1")
+
+    remaining = vm.installed_versions()
+    assert "2025.11.0" in remaining
+    assert "2026.5.1" in remaining
+
+
+def test_read_server_active_versions_absent_is_empty(tmp_path):
+    """Remote workers (own dir, no sentinel) see no pins."""
+    from version_manager import read_server_active_versions
+
+    assert read_server_active_versions(tmp_path) == set()
+
+
 def test_no_eviction_under_limit(tmp_path):
     """Installing a version when under the limit should not evict anything."""
     _add_fake_version(tmp_path, "v1")

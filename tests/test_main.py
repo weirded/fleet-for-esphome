@@ -462,7 +462,7 @@ async def test_reseed_device_poller_refreshes_after_install(tmp_path):
     # scanner has real YAML to chew on.
     (tmp_path / "secrets.yaml").write_text(
         'api_encryption_key: "Zp82U4SqCqe55xkDDuPXzsoNhcmEws7/HbNXsv2qOGI="\n'
-        'wifi_ssid: "x"\nwifi_password: "x"\nota_password: "x"\n'
+        'wifi_ssid: "x"\nwifi_password: "testpass1"\nota_password: "x"\n'
     )
     (tmp_path / "my-device.yaml").write_text(
         'esphome:\n  name: my-device\n'

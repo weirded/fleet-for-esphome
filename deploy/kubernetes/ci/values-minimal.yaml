@@ -1,0 +1,3 @@
+server:
+  url: http://homeassistant.local:8765
+  token: ci-test-token-do-not-deploy

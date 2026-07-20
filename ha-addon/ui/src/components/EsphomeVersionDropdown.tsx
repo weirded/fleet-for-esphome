@@ -21,20 +21,54 @@ function isBeta(v: string): boolean {
   return /\d(a|b|rc|dev)\d/i.test(v);
 }
 
+// #131 sub-bullet 4: floor for the "Installable only" filter.
+// ESPHome 2023.7.0 is the first release to officially support Python
+// 3.11+, which is what the add-on / server image runs. Anything older
+// likely fails at ``pip install esphome==X`` on the runtime Python and
+// the user wastes a few minutes finding out. The filter hides those
+// from the dropdown by default; users who genuinely want one of the
+// older builds can untick the box to see the full PyPI list.
+const INSTALLABLE_FLOOR = '2023.7.0';
+
+function compareEsphomeVersion(a: string, b: string): number {
+  // Strip the ``a|b|rc|devN`` suffix when comparing so "2024.6.0" and
+  // "2024.6.0b1" sort adjacently — sufficient for the floor check; the
+  // dropdown's display order is already PyPI's.
+  const parse = (v: string): number[] => {
+    const base = v.split(/[a-z]/i)[0];
+    return base.split('.').map(p => parseInt(p, 10) || 0);
+  };
+  const av = parse(a);
+  const bv = parse(b);
+  const len = Math.max(av.length, bv.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (av[i] ?? 0) - (bv[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function isInstallable(v: string): boolean {
+  return compareEsphomeVersion(v, INSTALLABLE_FLOOR) >= 0;
+}
+
 export function EsphomeVersionDropdown({ versions, onSelect, onRefresh }: Props) {
   const sel = versions.selected || '?';
   const [search, setSearch] = useState('');
   const [showBetas, setShowBetas] = useState(false);
+  // #131 sub-bullet 4: default ON; uncheck to see legacy versions.
+  const [installableOnly, setInstallableOnly] = useState(true);
 
   const filtered = useMemo(() => {
     let list = versions.available;
     if (!showBetas) list = list.filter(v => !isBeta(v));
+    if (installableOnly) list = list.filter(isInstallable);
     if (search) {
       const lc = search.toLowerCase();
       list = list.filter(v => v.toLowerCase().includes(lc));
     }
     return list;
-  }, [versions.available, showBetas, search]);
+  }, [versions.available, showBetas, installableOnly, search]);
 
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -59,6 +93,13 @@ export function EsphomeVersionDropdown({ versions, onSelect, onRefresh }: Props)
             <label className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] cursor-pointer">
               <input type="checkbox" checked={showBetas} onChange={e => setShowBetas(e.target.checked)} />
               Show betas
+            </label>
+            <label
+              className="flex items-center gap-1.5 text-[11px] text-[var(--text-muted)] cursor-pointer"
+              title={`Hides ESPHome versions older than ${INSTALLABLE_FLOOR} that won't pip install on the current Python runtime.`}
+            >
+              <input type="checkbox" checked={installableOnly} onChange={e => setInstallableOnly(e.target.checked)} />
+              Installable only
             </label>
           </div>
           <DropdownMenuSeparator />

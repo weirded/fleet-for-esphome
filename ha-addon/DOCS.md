@@ -93,13 +93,13 @@ Every server and client image on GHCR is signed with [cosign](https://docs.sigst
 ```bash
 # Server image
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/weirded/distributed-esphome/.github/workflows/publish-server\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/weirded/fleet-for-esphome/.github/workflows/publish-server\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/weirded/esphome-dist-server:latest
 
 # Worker image
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/weirded/distributed-esphome/.github/workflows/publish-client\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/weirded/fleet-for-esphome/.github/workflows/publish-client\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/weirded/esphome-dist-client:latest
 ```
@@ -113,7 +113,7 @@ Every 1.5.0+ image also carries a CycloneDX SBOM as a cosign attestation — the
 ```bash
 # Server image — download + print the SBOM
 cosign verify-attestation \
-  --certificate-identity-regexp 'https://github.com/weirded/distributed-esphome/.github/workflows/publish-server\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/weirded/fleet-for-esphome/.github/workflows/publish-server\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --type cyclonedx \
   ghcr.io/weirded/esphome-dist-server:latest \
@@ -122,7 +122,7 @@ cosign verify-attestation \
 
 # Worker image
 cosign verify-attestation \
-  --certificate-identity-regexp 'https://github.com/weirded/distributed-esphome/.github/workflows/publish-client\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/weirded/fleet-for-esphome/.github/workflows/publish-client\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --type cyclonedx \
   ghcr.io/weirded/esphome-dist-client:latest \

@@ -60,7 +60,7 @@ Three moving parts:
 
 Or manually:
 
-1. **Settings → Add-ons → Add-on Store → ⋮ (top right) → Repositories** and add `https://github.com/weirded/distributed-esphome`.
+1. **Settings → Add-ons → Add-on Store → ⋮ (top right) → Repositories** and add `https://github.com/weirded/fleet-for-esphome`.
 2. Find **Fleet for ESPHome** in the store and click **Install**.
 3. **Start** the add-on. Open the web UI from the HA sidebar.
 

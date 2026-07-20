@@ -46,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Worker client — its Dockerfile FROMs python:3.11-slim, so
+          # Worker client — its Dockerfile FROMs python:3.13-slim, so
           # buildx builds straight through.
           - name: client
             context: ha-addon/client
@@ -54,7 +54,7 @@ jobs:
             build_args: ""
           # Add-on server — its Dockerfile expects BUILD_FROM from
           # Supervisor. The default in the Dockerfile points at the
-          # same python:3.11-slim digest build.yaml uses for local
+          # same python:3.13-slim digest build.yaml uses for local
           # docker-build smokes, so leaving BUILD_FROM unset is fine.
           - name: server-addon
             context: ha-addon
@@ -78,10 +78,10 @@ jobs:
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Build (linux/amd64)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}

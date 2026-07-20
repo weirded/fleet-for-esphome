@@ -10,7 +10,7 @@ Be extremely concise. Sacrifice grammar for the sake of concision.
 
 Fleet for ESPHome (internally: `distributed-esphome`; previously branded "ESPHome Fleet" 1.5.0–1.7.0) manages fleets of ESPHome devices — offloads compilation to remote workers, schedules upgrades, pins versions per device, and organizes devices via tags. Runs as a Home Assistant add-on with a built-in local worker. Additional build workers run in Docker on remote machines, poll the server for jobs, compile firmware using ESPHome, and push firmware via OTA directly to ESP devices. <!-- br1-allow: brand-history -->
 
-**Naming convention:** user-facing docs/UI/log lines say **"Fleet for ESPHome"** (1.7.1 BR.1 rebrand). Code identifiers, the GitHub repo (`weirded/distributed-esphome`), Docker image names (`esphome-dist-server`, `esphome-dist-client`), the add-on slug (`esphome_dist_server`), the custom-integration domain (`esphome_fleet`), the mDNS service type (`_esphome-fleet._tcp.local.`), Python module names, and the YAML comment marker (`# distributed-esphome:`) all keep their existing form — changing those would force a migration on every existing install for no user benefit.
+**Naming convention:** user-facing docs/UI/log lines say **"Fleet for ESPHome"** (1.7.1 BR.1 rebrand). Code identifiers, Docker image names (`esphome-dist-server`, `esphome-dist-client`), the add-on slug (`esphome_dist_server`), the custom-integration domain (`esphome_fleet`), the mDNS service type (`_esphome-fleet._tcp.local.`), Python module names, and the YAML comment marker (`# distributed-esphome:`) all keep their existing form — changing those would force a migration on every existing install for no user benefit. The GitHub repo was renamed to `weirded/fleet-for-esphome` in 1.7.2; GitHub auto-redirects the old URL.
 
 ## Architecture
 
@@ -131,7 +131,7 @@ Checked mechanically by `scripts/check-invariants.sh` (wired into the CI `test` 
 
 **PY-8 — Every direct dep in `requirements.txt` must also appear in `requirements.lock`.** Dockerfiles install from the lockfile with `--require-hashes`, so anything present only in `requirements.txt` is silently missing from the image. Root cause of bug #39: `croniter` was added to `ha-addon/server/requirements.txt` but `scripts/refresh-deps.sh` was never rerun — the production image had no croniter, `schedule_checker` caught the `ImportError` and returned, and no scheduled upgrade ever fired in prod. `scripts/check-invariants.sh` now verifies the lockfile covers every entry in the .txt file.
 
-**PY-9 — No macOS-only packages in `requirements.lock`.** `pyobjc-core`, `pyobjc-framework-*`, and `appnope` leak in as platform-conditional transitives when `pip-compile` is run on a Mac host (they should carry `sys_platform == "darwin"` markers but `pip-compile --generate-hashes` strips markers). The Linux Docker build then errors with `PyObjC requires macOS to build`. Happened twice (1.3.1-dev.9, 1.4.1-dev.55). Always regenerate lockfiles via `scripts/refresh-deps.sh`, which runs `pip-compile` inside a `python:3.11-slim` container on `linux/amd64`. `scripts/check-invariants.sh` greps the lock for the known macOS-package names and fails CI on any hit.
+**PY-9 — No macOS-only packages in `requirements.lock`.** `pyobjc-core`, `pyobjc-framework-*`, and `appnope` leak in as platform-conditional transitives when `pip-compile` is run on a Mac host (they should carry `sys_platform == "darwin"` markers but `pip-compile --generate-hashes` strips markers). The Linux Docker build then errors with `PyObjC requires macOS to build`. Happened twice (1.3.1-dev.9, 1.4.1-dev.55). Always regenerate lockfiles via `scripts/refresh-deps.sh`, which runs `pip-compile` inside a `python:3.13-slim` container on `linux/amd64`. `scripts/check-invariants.sh` greps the lock for the known macOS-package names and fails CI on any hit.
 
 **PY-10 — `tests/test_integration_*.py` (without a `_logic` suffix) must import `pytest_homeassistant_custom_component`.** The plain `test_integration_*` name reads as "real test against a running HA" — if that's not what the file does, rename it to `test_integration_*_logic.py` (which the invariant exempts) so the filename doesn't mislead. Origin: IT.1 from 1.6 — mock-based helper tests were file-named as integration tests and reviewers kept assuming coverage that wasn't there, letting CR.12-class bugs ship (`async_setup_entry` misuse, `unique_id` collisions, config-flow regressions). `scripts/check-invariants.sh` greps each non-`_logic` integration test file for the `pytest_homeassistant_custom_component` import and fails CI if it's absent.
 
@@ -284,7 +284,7 @@ gh api graphql -f query='
 # "replies" off the first comment:
 CID=$(gh api graphql -f query='query($id:ID!){node(id:$id){... on PullRequestReviewThread{comments(first:1){nodes{databaseId}}}}}' \
       -F id=PRRT_kwDO... --jq .data.node.comments.nodes[0].databaseId)
-gh api "repos/weirded/distributed-esphome/pulls/<PR>/comments/$CID/replies" \
+gh api "repos/weirded/fleet-for-esphome/pulls/<PR>/comments/$CID/replies" \
   -X POST -f body='Fixed in <SHA> — <one-line what-changed>.'
 
 # Resolve one by its thread id (from the query above):

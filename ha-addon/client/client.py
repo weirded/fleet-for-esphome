@@ -46,7 +46,7 @@ from sysinfo import collect_system_info
 # can detect the mismatch and self-update.
 # ---------------------------------------------------------------------------
 
-CLIENT_VERSION = "1.7.1"
+CLIENT_VERSION = "1.7.2"
 
 
 def _read_image_version() -> Optional[str]:
@@ -162,6 +162,13 @@ WORKER_DISK_QUOTA_BYTES = _parse_disk_quota_gb_env(os.environ.get("WORKER_DISK_Q
 # free% drops below this regardless of our usage. Workers share the disk
 # with HA core, Docker, and logs.
 MIN_FREE_DISK_PCT = int(os.environ.get("MIN_FREE_DISK_PCT", "10"))
+# #144: disk usage is sampled by a background thread (see _disk_usage_sampler_loop)
+# rather than synchronously inside _build_system_info — a slow / NFS-mounted /data
+# would otherwise park the heartbeat thread inside _du_bytes long enough for the
+# server to mark the worker offline. INTERVAL is the cadence between samples;
+# BUDGET caps each sample's wall-clock cost.
+DISK_USAGE_SAMPLE_INTERVAL = int(os.environ.get("DISK_USAGE_SAMPLE_INTERVAL", "60"))
+DISK_USAGE_SAMPLE_BUDGET_S = float(os.environ.get("DISK_USAGE_SAMPLE_BUDGET_S", "30"))
 ESPHOME_BIN = os.environ.get("ESPHOME_BIN")  # If set, skip version manager
 ESPHOME_SEED_VERSION = os.environ.get("ESPHOME_SEED_VERSION")  # Pre-download on startup
 # Base directory for per-slot PlatformIO core dirs (avoids cross-slot conflicts)
@@ -244,28 +251,85 @@ def _get_last_eviction_freed_bytes() -> int:
         return _last_eviction_freed_bytes
 
 
+# #144: most-recent disk-usage sample, written by the background sampler
+# (see _disk_usage_sampler_loop) and read by _build_system_info. ``None``
+# means "not yet measured" — the first heartbeat after boot omits
+# ``disk_usage_bytes`` rather than performing the walk inline.
+_disk_usage_sample_lock: threading.Lock = threading.Lock()
+_disk_usage_sample_bytes: Optional[int] = None
+_disk_usage_sample_truncated: bool = False
+
+
+def _record_disk_usage_sample(total_bytes: int, truncated: bool) -> None:
+    global _disk_usage_sample_bytes, _disk_usage_sample_truncated
+    with _disk_usage_sample_lock:
+        _disk_usage_sample_bytes = total_bytes
+        _disk_usage_sample_truncated = truncated
+
+
+def _get_disk_usage_sample() -> Optional[int]:
+    with _disk_usage_sample_lock:
+        return _disk_usage_sample_bytes
+
+
 def _build_system_info() -> "SystemInfo":  # noqa: F821
     """Collect sysinfo + enrich with the disk-quota engine's current view.
 
     Kept as a helper so register and heartbeat both surface the same
     ``disk_usage_bytes`` / ``disk_quota_bytes`` / ``last_eviction_freed_bytes``
-    triple (DQ.6). ``compute_usage`` is a single os.scandir walk per call —
-    not free, but heartbeats are 10s apart and the dir's small.
+    triple (DQ.6). ``disk_usage_bytes`` is read from the background
+    sampler's cache (#144) — performing the walk inline would park the
+    heartbeat thread for tens of seconds on slow standalone-Docker
+    storage and trip the server's 30 s offline threshold.
     """
-    import disk_quota  # noqa: PLC0415
-
     sysinfo_dict = collect_system_info(_ESPHOME_VERSIONS_DIR)
-    base = Path(_ESPHOME_VERSIONS_DIR)
-    if base.exists():
-        try:
-            sysinfo_dict["disk_usage_bytes"] = disk_quota.compute_usage(base).total_bytes
-        except Exception:
-            logger.debug("disk_quota.compute_usage failed", exc_info=True)
+    cached = _get_disk_usage_sample()
+    if cached is not None:
+        sysinfo_dict["disk_usage_bytes"] = cached
     quota = _get_current_disk_quota_bytes()
     if quota is not None:
         sysinfo_dict["disk_quota_bytes"] = quota
     sysinfo_dict["last_eviction_freed_bytes"] = _get_last_eviction_freed_bytes()
     return SystemInfo.model_validate(sysinfo_dict)
+
+
+def _disk_usage_sampler_loop(stop_event: threading.Event) -> None:
+    """Periodically sample disk usage off the heartbeat hot path (#144).
+
+    ``compute_usage`` walks the venv + cache + slot + pio-slot trees
+    (~30 K files for one ESPHome install + PlatformIO toolchains). On
+    standalone-Docker deployments where ``/data`` is bind-mounted from
+    slow storage (NAS / NFS / spinning disk / overlay-fs), that walk can
+    exceed the server's 30 s offline threshold and the worker keeps
+    flipping offline mid-job. Running it here decouples heartbeat
+    liveness from disk speed; each walk is capped by
+    ``DISK_USAGE_SAMPLE_BUDGET_S`` so even a pathologically slow
+    backing store can't park this thread either.
+    """
+    import random  # noqa: PLC0415
+    import disk_quota  # noqa: PLC0415
+
+    base = Path(_ESPHOME_VERSIONS_DIR)
+    while not stop_event.is_set():
+        if base.exists():
+            try:
+                started = time.monotonic()
+                usage = disk_quota.compute_usage(
+                    base, deadline_s=DISK_USAGE_SAMPLE_BUDGET_S,
+                )
+                elapsed = time.monotonic() - started
+                _record_disk_usage_sample(usage.total_bytes, usage.truncated)
+                if usage.truncated:
+                    logger.warning(
+                        "disk-usage sample truncated after %.1fs (budget %.1fs) — "
+                        "partial total %d B; storage under /data may be slow",
+                        elapsed, DISK_USAGE_SAMPLE_BUDGET_S, usage.total_bytes,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.debug("disk-usage sampler failed", exc_info=True)
+        # 10 % jitter so multi-worker fleets don't synchronise their walks.
+        jitter = random.uniform(0, max(1.0, DISK_USAGE_SAMPLE_INTERVAL * 0.1))
+        stop_event.wait(DISK_USAGE_SAMPLE_INTERVAL + jitter)
 
 
 def _is_idle() -> bool:
@@ -722,6 +786,12 @@ def _run_disk_quota_sweep(
         return
 
     pinned = _active_job_set.snapshot()
+    # #119 (round 2): the embedded local worker shares this dir with the
+    # server's bundling venv. Pin the server's active version(s) so the
+    # disk-quota sweep never evicts the venv `scanner.create_bundle`
+    # shells into. Remote workers (own dir) read an empty set — no-op.
+    from version_manager import read_server_active_versions  # noqa: PLC0415
+    pinned.venv_versions |= read_server_active_versions(base)
     total_freed = 0
     summary_parts: list[str] = []
 
@@ -2311,6 +2381,19 @@ def main() -> None:
         _shutdown_requested.set()
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    # #144: spin up the disk-usage sampler before anything else so the
+    # cache starts warming while the version manager and registration
+    # run. Tied to _shutdown_requested rather than _start_bg_threads's
+    # per-cycle stop event — sampling doesn't depend on client_id, and
+    # we don't want the cache to reset on every re-register.
+    _disk_sampler_thread = threading.Thread(
+        target=_disk_usage_sampler_loop,
+        args=(_shutdown_requested,),
+        daemon=True,
+        name="disk-usage-sampler",
+    )
+    _disk_sampler_thread.start()
 
     version_manager = VersionManager(max_versions=MAX_ESPHOME_VERSIONS)
 

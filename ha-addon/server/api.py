@@ -562,12 +562,18 @@ async def get_next_job(request: web.Request) -> web.Response:
     # Different timezones produce different config_hash → unnecessary clean rebuilds.
     import time as _time  # noqa: PLC0415
     server_tz = _time.tzname[0] if _time.daylight == 0 else _time.tzname[1]
-    try:
-        # Prefer the actual TZ env var or read /etc/timezone for the IANA name
-        import os as _os  # noqa: PLC0415
-        server_tz = _os.environ.get("TZ") or open("/etc/timezone").read().strip() or server_tz
-    except Exception:
-        pass
+    import os as _os  # noqa: PLC0415
+
+    # Prefer the actual TZ env var or read /etc/timezone for the IANA name
+    tz_env = _os.environ.get("TZ")
+    if tz_env:
+        server_tz = tz_env
+    else:
+        try:
+            with open("/etc/timezone") as f:
+                server_tz = f.read().strip() or server_tz
+        except OSError:
+            pass
 
     assignment = JobAssignment(
         job_id=job.id,
@@ -1036,3 +1042,71 @@ async def get_status(request: web.Request) -> web.Response:
             "queue_size": queue.queue_size(),
         }
     )
+
+
+# Schema version for the /metrics/queue payload (#168). Bump if a field is
+# removed or its meaning changes — additive fields don't need a bump.
+METRICS_QUEUE_SCHEMA_VERSION = 1
+
+
+@routes.get("/api/v1/metrics/queue")
+async def get_metrics_queue(request: web.Request) -> web.Response:
+    """#168: machine-readable queue-depth metric for external autoscalers.
+
+    Compatible with KEDA's ``metrics-api`` scaler (JSONPath ``$.active``),
+    HPA via the ``external`` metrics adapter, Sablier, or any custom
+    controller. Bearer auth via the existing /api/v1 middleware — same
+    trust boundary as the worker-claim endpoints (read-only metric).
+
+    Response shape (1.7.2-dev.6):
+
+    .. code-block:: json
+
+        {
+          "pending": 2,
+          "working": 1,
+          "active": 3,
+          "online_workers": 1,
+          "max_parallel_capacity": 2,
+          "schema_version": 1
+        }
+
+    - ``active = pending + working`` — the metric the autoscaler should
+      scale on. Pending alone undercounts a mid-compile run; working
+      alone undercounts a backlog the existing workers can't catch up
+      on at parallelism = 1.
+    - ``max_parallel_capacity`` = ``sum(w.max_parallel_jobs)`` across
+      online workers — lets a controller answer "do existing online
+      workers have headroom?" before spinning a new pod/VM/LXC.
+    - ``schema_version`` is monotonic; downstream consumers can pin a
+      version and refuse to read newer payloads if a future bump
+      removes a field they depend on.
+    """
+    registry = request.app["registry"]
+    queue = request.app["queue"]
+    from settings import get_settings  # noqa: PLC0415
+    threshold = get_settings().worker_offline_threshold
+
+    pending = 0
+    working = 0
+    for j in queue.get_all():
+        if j.state == JobState.PENDING:
+            pending += 1
+        elif j.state == JobState.WORKING:
+            working += 1
+
+    online_workers = 0
+    max_parallel_capacity = 0
+    for w in registry.get_all():
+        if registry.is_online(w.client_id, threshold):
+            online_workers += 1
+            max_parallel_capacity += max(0, int(w.max_parallel_jobs or 0))
+
+    return web.json_response({
+        "pending": pending,
+        "working": working,
+        "active": pending + working,
+        "online_workers": online_workers,
+        "max_parallel_capacity": max_parallel_capacity,
+        "schema_version": METRICS_QUEUE_SCHEMA_VERSION,
+    })

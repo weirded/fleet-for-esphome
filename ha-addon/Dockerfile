@@ -5,7 +5,7 @@
 # the ``apt-get install`` step below and every sdist dep that ESPHome
 # pulls in at runtime. The per-arch ``build_from`` map in build.yaml
 # is identical for aarch64 and amd64
-# (``docker.io/library/python:3.11-slim``), and Docker's multi-arch
+# (``docker.io/library/python:3.13-slim``), and Docker's multi-arch
 # manifest selection picks the right variant based on the builder's
 # platform, so one FROM line covers both. The ``ARG BUILD_FROM`` lets
 # Supervisor override via ``--build-arg`` when it's actually driving
@@ -22,7 +22,7 @@
 #
 # PR #80 review: the previous comment claimed the digest "matches
 # ha-addon/build.yaml" — it doesn't. ``build.yaml`` carries the
-# **tag-only** image (``docker.io/library/python:3.11-slim``) because
+# **tag-only** image (``docker.io/library/python:3.13-slim``) because
 # Supervisor's ``supervisor/validate.py`` regex silently rejects
 # ``@sha256:…`` in the ``build_from`` map (it falls back to its own
 # arch-base image, which then breaks ``apt-get``).
@@ -38,8 +38,8 @@
 # because that's a secondary path explicitly scoped as "used when GHCR
 # is unreachable." Refresh both server + client digests in lockstep on
 # each release (cross-check with ``docker buildx imagetools inspect
-# docker.io/library/python:3.11-slim``).
-ARG BUILD_FROM=docker.io/library/python:3.11-slim@sha256:92c262cbb2e99cdc16218338d74fbe518055c13d224d942708f70f8042ff6d18
+# docker.io/library/python:3.13-slim``).
+ARG BUILD_FROM=docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
 FROM ${BUILD_FROM}
 
 ARG BUILD_ARCH
@@ -71,7 +71,12 @@ RUN . /etc/os-release && [ "$ID" = "debian" ] || { \
 # Same deps as the proven client Dockerfile — native glibc for PlatformIO toolchains.
 # Bug #6 (1.6.1): `iputils-ping` keeps the client's OTA network-diagnostics
 # probe functional when the server also hosts a local worker.
-RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping && rm -rf /var/lib/apt/lists/*
+# #240 (ESPHome 2026.7): the new native ESP-IDF toolchain (replacing
+# PlatformIO for ESP32) downloads openocd-esp32 and *verifies it by
+# executing it* during framework install; openocd links libusb-1.0.so.0,
+# so without `libusb-1.0-0` the verify exits 127 and the whole ESP-IDF
+# install fails -> every ESP32 compile dies.
+RUN apt-get update && apt-get install -y gcc libffi-dev libssl-dev git iputils-ping libusb-1.0-0 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # E.1: install from the hash-pinned lockfile, not the >= range list. The
