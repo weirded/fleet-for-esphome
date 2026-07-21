@@ -46,7 +46,7 @@ from sysinfo import collect_system_info
 # can detect the mismatch and self-update.
 # ---------------------------------------------------------------------------
 
-CLIENT_VERSION = "1.8.0-dev.1"
+CLIENT_VERSION = "1.8.0-dev.2"
 
 
 def _read_image_version() -> Optional[str]:
@@ -681,6 +681,241 @@ def _log_toolchain_state(pio_dir: str, reason: str) -> None:
             logger.warning("[#214] active jobs on this worker: %d", _active_jobs)
     except Exception:
         logger.warning("[#214] toolchain-state diagnostic crashed", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# #242: ESP-IDF shared-cache install race
+#
+# ESPHome installs the ESP-IDF framework + toolchain into a *process-global*
+# cache (``platformdirs.user_cache_dir("esphome")/idf``) and does no locking
+# whatsoever around that install — it assumes one esphome process at a time.
+# We run ``MAX_PARALLEL_JOBS`` of them concurrently against that one cache.
+#
+# When a new ESPHome release bumps the required IDF version (2026.7.0 → 2026.7.1
+# moved IDF 5.5.4 → 5.5.5), every slot hits a cold cache at once and races to
+# populate it. The observed result on the home lab: two slots invoked 2026.7.1
+# in the *same millisecond*, and ``frameworks/5.5.5/`` came out with 19,159 of
+# 27,275 files and no ``tools/`` directory at all.
+#
+# That corruption is permanent. ESPHome checks only that the directory exists,
+# fails validation, and raises ``ESP-IDF <ver> framework installation failure``
+# in ~0.5s on every subsequent job — it never removes the partial tree to retry.
+# Recreating the worker container does not help: the IDF cache lives in the
+# container's writable layer (only ``/esphome-versions`` is a volume), so a
+# reinstall guarantees a cold cache and simply re-runs the race.
+#
+# Two-part fix, mirroring the #214 PlatformIO precedent above:
+#   1. Prevention — serialise the *first* compile per ESPHome version behind an
+#      exclusive lock, so exactly one process performs the cold install. Once
+#      warm, compiles take a shared lock and run fully parallel again.
+#   2. Self-heal — if a cache is already poisoned (or a race is lost anyway),
+#      detect the signature, wipe the partial subtree, and retry once.
+#
+# The lock file lives in ``_ESPHOME_VERSIONS_DIR`` (the persistent volume) so
+# it survives cache wipes. The warm marker lives *inside the IDF cache* so it
+# is destroyed together with the thing it describes — a marker on the volume
+# would survive a container recreate and wrongly report a cold cache as warm.
+# ---------------------------------------------------------------------------
+
+_BROKEN_IDF_SIGNATURES: tuple[re.Pattern[str], ...] = (
+    # Partial framework tree — ESPHome's own validation failing (the
+    # dominant signature; fails in <1s because nothing is downloaded).
+    re.compile(r"ESP-IDF \S+ framework installation failure"),
+    # Toolchain extracted without its per-target dynconfig .so files.
+    re.compile(r"Dynconfig for target \S+ is not exist"),
+    # Toolchain missing multilib archives — the newlib layout that the
+    # gcc driver actually searches came out short.
+    re.compile(r"cannot find -lnosys"),
+)
+
+
+def _is_broken_idf_state(log: str) -> bool:
+    """#242: detect a corrupted shared ESP-IDF cache in a compile log.
+
+    Distinct from ``_is_broken_pio_state``: that one covers the per-slot
+    ``pio-slot-N/`` tree, which is unshared and safe to wipe at any time.
+    This covers the *shared* IDF cache, so the wipe must be serialised
+    against every other slot — see ``_wipe_broken_idf_cache``.
+    """
+    return any(pat.search(log) for pat in _BROKEN_IDF_SIGNATURES)
+
+
+def _idf_cache_root() -> str:
+    """#242: the ESP-IDF cache directory ESPHome will use.
+
+    Mirrors ``platformdirs.user_cache_dir("esphome", appauthor=False)``
+    on Linux — ``$XDG_CACHE_HOME`` if set, else ``~/.cache`` — plus the
+    ``idf`` suffix ESPHome appends. Replicated rather than imported so
+    the worker doesn't take a runtime dependency on platformdirs (which
+    would need a requirements.txt + lockfile round-trip under PY-8).
+    """
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "esphome", "idf")
+
+
+def _idf_cache_looks_populated() -> bool:
+    """#242: True when the IDF cache holds at least one framework that has
+    its ``tools/`` subtree.
+
+    Guards the warm marker against false positives. A compile can fail
+    long before ESPHome touches the IDF cache (bad YAML, missing secret),
+    and marking that as "warm" would let the next batch race a still-cold
+    cache — reintroducing the exact bug. ``tools/`` is the specific thing
+    the observed corruption was missing (it holds ``tools/cmake/project.cmake``),
+    so it is both a completeness signal and a direct regression check.
+    """
+    frameworks = os.path.join(_idf_cache_root(), "frameworks")
+    try:
+        for entry in os.listdir(frameworks):
+            if os.path.isdir(os.path.join(frameworks, entry, "tools")):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _idf_warm_marker(esphome_version: str) -> str:
+    """Path of the marker recording that *esphome_version* has already
+    completed a compile against this IDF cache."""
+    return os.path.join(_idf_cache_root(), f".fleet-warm-{esphome_version}")
+
+
+def _idf_is_warm(esphome_version: str) -> bool:
+    """True when some earlier compile already populated the IDF cache for
+    this ESPHome version, so a cold-install race is no longer possible."""
+    return os.path.isfile(_idf_warm_marker(esphome_version))
+
+
+def _mark_idf_warm(esphome_version: str) -> None:
+    """Record that the IDF cache is populated for *esphome_version*.
+
+    Best-effort: a failure here costs an unnecessary serialised compile
+    next time, never correctness.
+    """
+    if not _idf_cache_looks_populated():
+        return
+    marker = _idf_warm_marker(esphome_version)
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as fp:
+            fp.write(f"{esphome_version}\n")
+    except OSError as exc:
+        logger.debug("[#242] could not write warm marker %s: %s", marker, exc)
+
+
+@contextmanager
+def _idf_install_lock(exclusive: bool) -> Iterator[None]:
+    """#242: fcntl lock serialising cold ESP-IDF installs across slots.
+
+    ``exclusive=True`` (cold cache) blocks every other slot for the
+    duration of the compile, so exactly one process performs the install.
+    ``exclusive=False`` (warm cache) takes a shared lock, which is
+    uncontended between compiles but still blocks while some other slot
+    holds the exclusive lock — that is what makes the warm path wait for
+    a cold install instead of racing it.
+
+    The lock file lives on the persistent volume and is never deleted;
+    it is only ever a handle. Lock acquisition failures are non-fatal:
+    an unlockable filesystem should degrade to today's behaviour rather
+    than refuse to compile.
+    """
+    lock_path = os.path.join(_ESPHOME_VERSIONS_DIR, "idf-install.lock")
+    mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    fp = None
+    try:
+        os.makedirs(_ESPHOME_VERSIONS_DIR, exist_ok=True)
+        fp = open(lock_path, "w", encoding="utf-8")
+        fcntl.flock(fp.fileno(), mode)
+    except OSError as exc:
+        logger.warning(
+            "[#242] could not acquire %s IDF install lock at %s (%s) — "
+            "proceeding unserialised.",
+            "exclusive" if exclusive else "shared", lock_path, exc,
+        )
+        if fp is not None:
+            fp.close()
+            fp = None
+    try:
+        yield
+    finally:
+        if fp is not None:
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+            finally:
+                fp.close()
+
+
+def _wipe_broken_idf_cache(esphome_version: str) -> bool:
+    """#242: wipe a corrupted shared ESP-IDF cache so the next compile
+    re-downloads it cleanly.
+
+    Removes ``frameworks/`` and ``tools/`` under the IDF cache root, plus
+    every warm marker (the cache they described is gone). The caller must
+    already hold the **exclusive** install lock — the cache is shared, so
+    wiping it while another slot is mid-compile would break that slot.
+
+    Mirrors ``_wipe_broken_toolchain``'s disk guard (#219): re-extracting
+    the IDF framework + toolchain needs several GiB, and wiping only to
+    hit ENOSPC mid-tarball would re-corrupt exactly what we just cleaned.
+
+    Returns True if at least one subtree was removed.
+    """
+    root = _idf_cache_root()
+    targets = [os.path.join(root, name) for name in ("frameworks", "tools")]
+    existing = [t for t in targets if os.path.isdir(t)]
+    if not existing:
+        logger.warning("[#242] no frameworks/ or tools/ under %s — nothing to wipe", root)
+        return False
+    try:
+        free_gib = shutil.disk_usage(root).free / (1024 ** 3)
+        if free_gib < 5.0:
+            logger.warning(
+                "[#242] skipping IDF self-heal of %s — only %.2f GiB free; a "
+                "fresh ESP-IDF framework + toolchain extract needs several GiB. "
+                "Free disk on the worker host and retry.",
+                root, free_gib,
+            )
+            return False
+    except OSError as exc:
+        logger.warning("[#242] disk_usage probe failed on %s: %s", root, exc)
+    wiped_any = False
+    for target in existing:
+        logger.warning(
+            "[#242] wiping corrupted ESP-IDF cache at %s — next compile will "
+            "re-download (several minutes on a cold link).",
+            target,
+        )
+        try:
+            shutil.rmtree(target, ignore_errors=False)
+        except Exception as exc:
+            logger.warning(
+                "[#242] strict wipe of %s raised %s — sweeping leftovers with "
+                "ignore_errors=True.",
+                target, exc,
+            )
+            try:
+                shutil.rmtree(target, ignore_errors=True)
+            except Exception:
+                pass
+        if os.path.exists(target):
+            logger.warning(
+                "[#242] subtree at %s still present after wipe — the retry will "
+                "likely fail; investigate filesystem state.", target,
+            )
+        else:
+            wiped_any = True
+    # The warm markers described the cache we just deleted. Drop them all so
+    # the next compile re-takes the exclusive lock and installs cleanly.
+    try:
+        for entry in os.listdir(root):
+            if entry.startswith(".fleet-warm-"):
+                try:
+                    os.unlink(os.path.join(root, entry))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return wiped_any
 
 
 def _clean_build_cache() -> None:
@@ -1655,14 +1890,45 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
             _report_status(job_id, "Compiling (no OTA)")
             compile_cmd = [esphome_bin, "compile", target_path]
             _log_invocation(job_id, compile_cmd)
-            compile_log, compile_ok = _run_subprocess(
-                compile_cmd,
-                cwd=build_dir,
-                timeout=timeout_seconds,
-                label="compile",
-                env=subprocess_env,
-                job_id=job_id,
-            )
+            # #242: same IDF install serialisation as the OTA path below.
+            idf_cold = not _idf_is_warm(esphome_version)
+            if idf_cold:
+                _flush_log_text(
+                    job_id,
+                    f"\n--- ESP-IDF cache is cold for ESPHome {esphome_version}; "
+                    "serialising this compile so the install isn't raced by "
+                    "another build slot. ---\n",
+                )
+            with _idf_install_lock(exclusive=idf_cold):
+                compile_log, compile_ok = _run_subprocess(
+                    compile_cmd,
+                    cwd=build_dir,
+                    timeout=timeout_seconds,
+                    label="compile",
+                    env=subprocess_env,
+                    job_id=job_id,
+                )
+                if not _is_broken_idf_state(compile_log):
+                    _mark_idf_warm(esphome_version)
+            # #242 self-heal — see the run_cmd block below for context.
+            if not compile_ok and _is_broken_idf_state(compile_log):
+                with _idf_install_lock(exclusive=True):
+                    if _wipe_broken_idf_cache(esphome_version):
+                        _flush_log_text(
+                            job_id,
+                            "\n--- #242 self-heal: the shared ESP-IDF cache was "
+                            "corrupted (partial install). Wiped it and retrying. ---\n",
+                        )
+                        compile_log, compile_ok = _run_subprocess(
+                            compile_cmd,
+                            cwd=build_dir,
+                            timeout=timeout_seconds,
+                            label="compile (retry after IDF cache wipe)",
+                            env=subprocess_env,
+                            job_id=job_id,
+                        )
+                        if not _is_broken_idf_state(compile_log):
+                            _mark_idf_warm(esphome_version)
             # #214: same self-heal as the OTA path — see the comment on
             # the run_cmd retry block below for context.
             if not compile_ok and _is_broken_pio_state(compile_log):
@@ -1730,14 +1996,55 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
 
         # Total timeout covers both compile + OTA
         total_timeout = timeout_seconds + OTA_TIMEOUT
-        run_log, run_ok = _run_subprocess(
-            run_cmd,
-            cwd=build_dir,
-            timeout=total_timeout,
-            label="compile+OTA",
-            env=subprocess_env,
-            job_id=job_id,
-        )
+        # #242: hold the IDF install lock for the compile. Cold cache =>
+        # exclusive, so this slot performs the install alone; warm =>
+        # shared, so slots run parallel but still wait behind any cold
+        # install in flight.
+        idf_cold = not _idf_is_warm(esphome_version)
+        if idf_cold:
+            _flush_log_text(
+                job_id,
+                f"\n--- ESP-IDF cache is cold for ESPHome {esphome_version}; "
+                "serialising this compile so the install isn't raced by another "
+                "build slot. Other jobs on this worker will queue briefly. ---\n",
+            )
+        with _idf_install_lock(exclusive=idf_cold):
+            run_log, run_ok = _run_subprocess(
+                run_cmd,
+                cwd=build_dir,
+                timeout=total_timeout,
+                label="compile+OTA",
+                env=subprocess_env,
+                job_id=job_id,
+            )
+            if not _is_broken_idf_state(run_log):
+                _mark_idf_warm(esphome_version)
+
+        # #242 self-heal: a poisoned cache predating this fix (or a race
+        # lost anyway) leaves a partial tree that ESPHome never repairs —
+        # it just fails in <1s forever. Wipe it and retry once. This has
+        # to re-acquire the lock *exclusively*: the cache is shared, so
+        # the wipe must exclude every other slot.
+        if not run_ok and _is_broken_idf_state(run_log):
+            with _idf_install_lock(exclusive=True):
+                if _wipe_broken_idf_cache(esphome_version):
+                    _flush_log_text(
+                        job_id,
+                        "\n--- #242 self-heal: the shared ESP-IDF cache was "
+                        "corrupted (partial install). Wiped it and retrying — "
+                        "the re-download takes several minutes, so other jobs "
+                        "on this worker will queue behind it. ---\n",
+                    )
+                    run_log, run_ok = _run_subprocess(
+                        run_cmd,
+                        cwd=build_dir,
+                        timeout=total_timeout,
+                        label="compile+OTA (retry after IDF cache wipe)",
+                        env=subprocess_env,
+                        job_id=job_id,
+                    )
+                    if not _is_broken_idf_state(run_log):
+                        _mark_idf_warm(esphome_version)
 
         # #214 / #220: when the compile failed with any of the broken-
         # pio-slot signatures (see ``_BROKEN_PIO_SIGNATURES``), the
