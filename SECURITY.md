@@ -4,9 +4,9 @@
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.7.2    | ✅ Current release  |
-| 1.7.1    | ✅ Previous stable — security fixes only if trivially backportable |
-| < 1.7.1  | ❌ No patches       |
+| 1.7.3    | ✅ Current release  |
+| 1.7.2    | ✅ Previous stable — security fixes only if trivially backportable |
+| < 1.7.2  | ❌ No patches       |
 
 *(Note: the 1.5 release was developed as `1.4.1-dev.N` through dev.72 and renumbered late cycle as scope grew beyond a patch release. Docker tags with the `1.4.1-dev.N` stamp remain pullable from GHCR but are superseded by the 1.5.x stable tags.)*
 
@@ -100,7 +100,14 @@ These are accepted risks within the home-network threat model; see the full audi
 
 ### Residual posture
 
-All 21 audit findings are now FIXED, WONTFIX-by-threat-model, or marked INFO. Cycle deltas for 1.7.1 (no F-* status flips):
+All 21 audit findings are now FIXED, WONTFIX-by-threat-model, or marked INFO. Cycle deltas for 1.7.3 (no F-* status flips):
+
+- **Both open HIGH Dependabot alerts closed.** `fast-uri` (< 3.1.4) and `brace-expansion` (< 5.0.7). The `fast-uri` bullet under the 1.7.1 deltas below recorded `first_patched_version: null` — "nothing to upgrade to" — and said to re-evaluate; upstream has since published 3.1.4, so the accepted-risk note is superseded and the `fast-uri-DEV` WONTFIX is retired. Both packages remain **dev-only** (`eslint → minimatch` and `shadcn → @modelcontextprotocol/sdk → ajv`) and never reach a production bundle. `npm audit --audit-level=high --omit=dev` is clean.
+- **Two MODERATE production findings remain, deliberately.** Nine DOMPurify advisories reached through `monaco-editor` 0.55.1; the only fix is monaco 0.56.0, which breaks the editor build (moved module paths, `inlineSuggest.enabled` changed from boolean to a string union). Held back and tracked as DEP.2. Not exploitable here: every advisory is in DOMPurify's markdown/HTML sanitisation path, and the editor passes completion documentation as a plain string rather than a markdown object and registers no hover provider, so that path is never reached.
+- **Lint tooling pinned.** CI installed `ruff` and `mypy` unpinned, running whatever version was newest at job time. Now pinned. The analysis tooling that gates every release is reproducible; the cost is that pins need deliberate bumping.
+- **Server + worker dependency floors raised** (`aiohttp`, `aioesphomeapi`, `apscheduler`, `croniter`, `idna`), lockfiles regenerated with `--generate-hashes` on linux/amd64. The worker lockfile came out byte-identical, so deployed workers are not forced to rebuild.
+
+Cycle deltas for 1.7.1 (no F-* status flips):
 
 - **Brand rebrand — metadata-only at the network/auth layer.** *"ESPHome Fleet"* (1.5.0–1.7.0) renamed to **Fleet for ESPHome**. Verified pre-flip in `dev-plans/archive/WORKITEMS-1.7.1.md` BR.1 sub-bullet 12: code identifiers (add-on slug, integration domain, GHCR image names, mDNS service type, Bearer-realm consumers, all `esphome_fleet.*` HA service names) keep their existing forms. No migration on existing installs; no trust-boundary change. <!-- br1-allow: rebrand chronology -->
 - **Legacy full-config-dir bundle path (#131).** Lifted the install-time refusal of ESPHome <2026.4. The server's `create_bundle` now branches on the *server*'s installed ESPHome version: ≥2026.4 keeps the validated, target-scoped `ConfigBundleCreator` subprocess; <2026.4 falls back to a deterministic full-config-dir tar (mirrors the pre-1.6.2 layout). Trade-off: the legacy path ships every device's `secrets.yaml` and every other device's YAML to the worker — see the bullet under "What is *not* in scope" above. Per-job ESPHome version selection is independent of the server's bundling version (the server's *active* venv decides bundle shape; the *job*'s pinned version decides what the worker compiles with), so an operator who keeps the server on 2026.4+ retains the scoped bundle even when individual targets compile against older releases.

@@ -103,7 +103,15 @@ jobs:
           cache: "pip"
 
       - name: Install lint tools
-        run: pip install ruff mypy types-requests types-PyYAML
+        # Pinned deliberately. These two tools *define* the lint gate, so an
+        # unpinned install makes CI's verdict depend on the day it ran rather
+        # than on the code. Ruff 0.16.0 (released 2026-07-2x) widened its
+        # default rule selection and turned a green `develop` red overnight
+        # with 754 findings on code nobody had touched — all stylistic
+        # defaults (Optional[X] → X | None, BLE001, S110), none a real defect.
+        # Adopting a newer ruff is a deliberate change with its own workitem
+        # (LNT.1), not something a random Tuesday's release should do.
+        run: pip install ruff==0.15.22 mypy==2.3.0 types-requests types-PyYAML
 
       - name: Ruff lint
         run: ruff check ha-addon/server/ ha-addon/client/
