@@ -1519,9 +1519,22 @@ def _detect_ota_ports(target_path: str) -> list[int]:
         if in_ota_block:
             ota_block_lines.append(line)
 
-    port_match = _re.search(r"port:\s*(\d+)", "".join(ota_block_lines))
-    if port_match:
-        return [int(port_match.group(1))]
+    # Every port in the block, not just the first. ESPHome 2024.6+ made
+    # ``ota:`` a *list of platforms*, so a config can legitimately declare
+    # more than one — e.g. a ``web_server`` OTA platform on 8080 alongside
+    # the ``esphome`` platform on 3232. Taking the first match returns
+    # whichever platform happens to be written first, which is the same
+    # "first port: wins" failure this function was rewritten to fix, just
+    # scoped to inside the block instead of the whole file. Probing every
+    # declared port costs nothing: the caller loops them and short-circuits
+    # on the first that answers.
+    #
+    # dict.fromkeys rather than set() so the declared order is preserved —
+    # the first-declared port is tried first, and the probe timeout is
+    # per-port.
+    ports = [int(p) for p in _re.findall(r"port:\s*(\d+)", "".join(ota_block_lines))]
+    if ports:
+        return list(dict.fromkeys(ports))
     return [3232, 8266]
 
 

@@ -820,6 +820,48 @@ def test_detect_ota_ports_honors_list_form_ota_block(tmp_path):
     assert client_module._detect_ota_ports(str(target)) == [3333]
 
 
+def test_detect_ota_ports_returns_every_declared_platform_port(tmp_path):
+    """A multi-platform `ota:` block must yield every port, not just the first.
+
+    ESPHome 2024.6+ made `ota:` a list of platforms, so declaring the
+    `web_server` OTA platform alongside the `esphome` one is legal and not
+    unusual. Returning only the first match makes the answer depend on
+    which platform the user happened to write first — the same "first
+    `port:` wins" bug this function was rewritten to fix, just scoped to
+    inside the block rather than the whole file. Picking 8080 here and
+    finding nothing listening produces a false "unreachable" verdict and
+    an unnecessary hand-off to server-side OTA.
+
+    The caller probes the list in order and stops at the first port that
+    answers, so returning both is strictly better than guessing.
+    """
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n"
+        "  - platform: web_server\n    port: 8080\n"
+        "  - platform: esphome\n    port: 3232\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [8080, 3232]
+
+
+def test_detect_ota_ports_dedupes_repeated_ports(tmp_path):
+    """Two platforms on the same port shouldn't mean two identical probes —
+    each costs a full connect timeout when the device is unreachable."""
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n"
+        "  - platform: esphome\n    port: 3232\n"
+        "  - platform: web_server\n    port: 3232\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [3232]
+
+
 def test_detect_ota_ports_tolerates_unresolved_secret_tags(tmp_path):
     """`!secret` (and other ESPHome custom tags) must not blow up the
     scan — it's a plain line-based indentation scan, not a YAML parse,
