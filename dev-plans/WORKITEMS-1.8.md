@@ -100,9 +100,17 @@ Largely as scoped before — adapted to ride on LL.* (LiteLLM, structured output
 
 ## Issue & PR triage
 
-State of the public tracker as of `1.8.0-dev.7`. Kept here rather than anywhere
-else so `dev-plans/` stays the single source of truth — this section is the thing
-to update, not a dashboard somewhere.
+State of the public tracker as of `1.8.0-dev.7`. **This section is the source of
+truth** — update it first.
+
+A rendered mirror of it is published as an Artifact at
+<https://claude.ai/code/artifact/64fc6f80-f607-4980-9cf6-bec94c4179db>, generated
+from `dev-plans/status-board.html` in this directory. The mirror is for skimming
+release state at a glance; it derives from this file and must be republished
+whenever this section changes, or it silently starts lying. Keeping the HTML in
+the repo rather than in a scratch directory is deliberate — otherwise the only
+copy dies with whatever session last touched it and the next update means
+re-authoring the page from scratch.
 
 ### Fixed on `develop`, not yet released
 

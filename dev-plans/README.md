@@ -11,6 +11,7 @@ Each WORKITEMS file's first paragraph is the authoritative theme — read the fi
 - **[WORKITEMS-future.md](WORKITEMS-future.md)** — Unscheduled backlog.
 - **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Security audit findings.
 - **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — Release process.
+- **[status-board.html](status-board.html)** — Rendered mirror of the current release file's *Issue & PR triage* section, published as an Artifact for at-a-glance release state. Derived from the markdown, never the other way round; republish it whenever that section changes.
 
 ## Archive
 

@@ -1,0 +1,457 @@
+<title>Fleet 1.8 Release Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+  :root {
+    --ground:      #F4F5F3;
+    --surface:     #FFFFFF;
+    --surface-2:   #FAFBFA;
+    --ink:         #14201F;
+    --muted:       #5A6664;
+    --rule:        #DCE0DD;
+    --rule-soft:   #E9ECE9;
+    --accent:      #1F6F6B;
+    --accent-soft: #E3EFEE;
+    --ok:          #1A7F37;
+    --ok-soft:     #E4F1E7;
+    --warn:        #8A5A00;
+    --warn-soft:   #F6EEDC;
+    --crit:        #B42318;
+    --crit-soft:   #FBE9E7;
+    --idle:        #7A8582;
+    --idle-soft:   #ECEEED;
+    --shadow:      0 1px 2px rgba(20,32,31,.05), 0 8px 24px -16px rgba(20,32,31,.25);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101614;
+      --surface:     #161E1C;
+      --surface-2:   #1B2523;
+      --ink:         #E6EBE9;
+      --muted:       #96A29F;
+      --rule:        #26302E;
+      --rule-soft:   #1F2927;
+      --accent:      #5FB8B2;
+      --accent-soft: #17302E;
+      --ok:          #4FB964;
+      --ok-soft:     #16281B;
+      --warn:        #D29922;
+      --warn-soft:   #2A2314;
+      --crit:        #F0645A;
+      --crit-soft:   #2C1817;
+      --idle:        #77837F;
+      --idle-soft:   #1E2726;
+      --shadow:      0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #101614;
+    --surface:     #161E1C;
+    --surface-2:   #1B2523;
+    --ink:         #E6EBE9;
+    --muted:       #96A29F;
+    --rule:        #26302E;
+    --rule-soft:   #1F2927;
+    --accent:      #5FB8B2;
+    --accent-soft: #17302E;
+    --ok:          #4FB964;
+    --ok-soft:     #16281B;
+    --warn:        #D29922;
+    --warn-soft:   #2A2314;
+    --crit:        #F0645A;
+    --crit-soft:   #2C1817;
+    --idle:        #77837F;
+    --idle-soft:   #1E2726;
+    --shadow:      0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  /* ---- masthead ---------------------------------------------------- */
+  .mast { display: flex; flex-direction: column; gap: 14px; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 26px; height: 2px;
+    background: var(--accent);
+    display: inline-block;
+    flex: none;
+  }
+  h1 {
+    font-family: "IBM Plex Serif", ui-serif, Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(30px, 4.6vw, 44px);
+    line-height: 1.12;
+    letter-spacing: -.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst {
+    max-width: 66ch;
+    color: var(--muted);
+    font-size: 16px;
+    margin: 0;
+  }
+
+  /* ---- summary strip ----------------------------------------------- */
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .cell { background: var(--surface); padding: 15px 16px 14px; display: flex; flex-direction: column; gap: 5px; }
+  .cell dt {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 500; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); margin: 0;
+  }
+  .cell dd {
+    margin: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 21px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    line-height: 1.15;
+  }
+  .cell .sub { font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+
+  /* ---- sections ----------------------------------------------------- */
+  section { display: flex; flex-direction: column; gap: 16px; }
+  h2 {
+    font-family: "IBM Plex Serif", ui-serif, Georgia, serif;
+    font-size: 21px; font-weight: 600; margin: 0;
+    letter-spacing: -.01em;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h2 .count {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px; font-weight: 500; color: var(--muted);
+    letter-spacing: .04em; margin-left: 8px;
+  }
+  .note { color: var(--muted); font-size: 14.5px; margin: 0; max-width: 72ch; }
+  .note strong { color: var(--ink); font-weight: 600; }
+
+  /* ---- chips -------------------------------------------------------- */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px; font-weight: 500; letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 2.5px 7px; border-radius: 2px; white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+  .c-ok   { color: var(--ok);   background: var(--ok-soft); }
+  .c-warn { color: var(--warn); background: var(--warn-soft); }
+  .c-crit { color: var(--crit); background: var(--crit-soft); }
+  .c-idle { color: var(--idle); background: var(--idle-soft); }
+  .c-acc  { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---- tables ------------------------------------------------------- */
+  .scroll { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+  thead th {
+    text-align: left;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted);
+    padding: 10px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody td { padding: 10px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: var(--surface-2); }
+  td.id {
+    font-family: "IBM Plex Mono", monospace; font-weight: 500;
+    font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent);
+  }
+  td.st { white-space: nowrap; }
+  .why { color: var(--muted); font-size: 13px; display: block; margin-top: 2px; }
+
+  /* ---- workstream bars ---------------------------------------------- */
+  .bars { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .bar-row {
+    background: var(--surface);
+    display: grid;
+    grid-template-columns: 190px 1fr 74px;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 14px;
+  }
+  .bar-name { font-size: 13.5px; font-weight: 500; }
+  .bar-name span { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  .track { height: 6px; border-radius: 3px; background: var(--rule-soft); overflow: hidden; min-width: 60px; }
+  .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .fill.none { background: var(--idle); opacity: .35; }
+  .bar-num {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+    font-variant-numeric: tabular-nums; color: var(--muted); text-align: right;
+  }
+
+  /* ---- callout ------------------------------------------------------ */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .callout h3 {
+    margin: 0; font-size: 14.5px; font-weight: 600;
+    font-family: "IBM Plex Sans", sans-serif;
+  }
+  .callout p { margin: 0; color: var(--muted); font-size: 14px; }
+  .callout.crit { border-left-color: var(--crit); }
+  .callout.warn { border-left-color: var(--warn); }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .89em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 1px 5px; border-radius: 2px;
+  }
+
+  ul.tight { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 14.5px; }
+  ul.tight strong { color: var(--ink); font-weight: 600; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 16px;
+    color: var(--muted);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    letter-spacing: .04em;
+    display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  }
+
+  @media (max-width: 620px) {
+    .bar-row { grid-template-columns: 1fr 60px; }
+    .bar-row .track { grid-column: 1 / -1; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Fleet for ESPHome &middot; develop @ 6b1f932 &middot; 1.8.0-dev.7</div>
+    <h1>1.8 release board</h1>
+    <p class="standfirst">Where the release actually stands: what landed, what the numbers say, and the two things that still block an honest Gold claim. Everything here is measured from the repo, not estimated — and mirrors <code>dev-plans/</code>, which stays the source of truth.</p>
+  </header>
+
+  <dl class="strip">
+    <div class="cell">
+      <dt>Work items</dt>
+      <dd>19<span class="sub"> / 82 done</span></dd>
+    </div>
+    <div class="cell">
+      <dt>Quality scale</dt>
+      <dd>41<span class="sub"> done · 3 todo</span></dd>
+    </div>
+    <div class="cell">
+      <dt>Open PRs</dt>
+      <dd>2<span class="sub"> was 12</span></dd>
+    </div>
+    <div class="cell">
+      <dt>Fixed, unreleased</dt>
+      <dd>10<span class="sub"> issues</span></dd>
+    </div>
+    <div class="cell">
+      <dt>Test suite</dt>
+      <dd>1144<span class="sub"> passing</span></dd>
+    </div>
+    <div class="cell">
+      <dt>Hardware matrix</dt>
+      <dd>3/3<span class="sub"> targets green</span></dd>
+    </div>
+  </dl>
+
+  <section>
+    <h2>Landed this session <span class="count">4 commits, dev.3 → dev.6</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Build</th><th>What</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="id">dev.3</td>
+            <td>Six issue-tracker fixes
+              <span class="why">#199 restart-unavailable entities · #171/#197 stale device IP · #114 port-clash diagnostic · #204 diff readability · #193 configurable install timeout · #240 install-failure message</span></td>
+            <td class="st"><span class="chip c-ok">18 new tests</span></td>
+          </tr>
+          <tr>
+            <td class="id">dev.4</td>
+            <td>monaco-editor 0.55.1 → 0.56.0 with its real API migration
+              <span class="why">Import fixes alone silently stripped 1.0 MB of editor features and the icon font; <code>features/register.all.js</code> restores them</span></td>
+            <td class="st"><span class="chip c-ok">198/198 e2e</span></td>
+          </tr>
+          <tr>
+            <td class="id">dev.5</td>
+            <td>Merged PR #133 — server-side OTA for Thread/Matter
+              <span class="why">Closes issue #132. Validator exercised directly against flag-injection; protocol copies byte-identical</span></td>
+            <td class="st"><span class="chip c-ok">+34 tests</span></td>
+          </tr>
+          <tr>
+            <td class="id">dev.6</td>
+            <td>#247, #243 and the QS.G1–G5 Gold items
+              <span class="why">Install-window requeue · venv interpreter check · integration docs · 22 entity names to translation keys</span></td>
+            <td class="st"><span class="chip c-ok">+16 tests</span></td>
+          </tr>
+          <tr>
+            <td class="id">dev.7</td>
+            <td>Merged PR #252 — add-on-side OTA fallback for unreachable devices
+              <span class="why">Closes #195 and #110. Contributor rebased and addressed the whole review; my port-detection fix cherry-picked verbatim</span></td>
+            <td class="st"><span class="chip c-ok">+17 tests</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Two of these were fixed by changing behaviour rather than wording. <strong>#247</strong> now requeues a job dispatched during the ESPHome install window instead of blaming the user's YAML — that failure cost a full matrix re-run twice in this cycle. <strong>#243</strong> now treats a venv built by a different Python as not-installed, so the existing wipe-and-rebuild self-heals it.</p>
+  </section>
+
+  <section>
+    <h2>Work items by workstream <span class="count">63 open</span></h2>
+    <div class="bars">
+      <div class="bar-row"><div class="bar-name">QS — Quality scale<span>Gold rule walk</span></div><div class="track"><div class="fill" style="width:45%"></div></div><div class="bar-num">5/11</div></div>
+      <div class="bar-row"><div class="bar-name">FC — Fleet chat<span>1.8 theme</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/10</div></div>
+      <div class="bar-row"><div class="bar-name">I18N — Translation<span>Carried from 1.7.2</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/10</div></div>
+      <div class="bar-row"><div class="bar-name">LL — LLM provider layer<span>1.8 theme</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/8</div></div>
+      <div class="bar-row"><div class="bar-name">HT — Honest testing<span>Carried from 1.7.2</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/8</div></div>
+      <div class="bar-row"><div class="bar-name">AI — In-editor assistant<span>1.8 theme</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/6</div></div>
+      <div class="bar-row"><div class="bar-name">BC — Breaking-change analyzer<span>1.8 theme</span></div><div class="track"><div class="fill none" style="width:2%"></div></div><div class="bar-num">0/6</div></div>
+      <div class="bar-row"><div class="bar-name">DEP / CI / SD / LNT / TP<span>Deps, gates, discipline</span></div><div class="track"><div class="fill" style="width:12%"></div></div><div class="bar-num">1/9</div></div>
+    </div>
+    <p class="note"><strong>34 of the 63 open items are the 1.8 LLM theme itself</strong> (LL + AI + FC + BC) — genuinely unbuilt, not slipping. The carried-forward I18N and HT workstreams are another 18. What closed this session came from the bug list and the Gold rule walk, which is where the closeable work was.</p>
+  </section>
+
+  <section>
+    <h2>Pull requests <span class="count">2 open, was 12</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>PR</th><th>Title</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td class="id">#225</td><td>typescript 6.0.3 → 7.0.2<span class="why">Builds clean, bundle byte-identical, 198/198 e2e — but breaks eslint entirely (117 parse errors). No typescript-eslint release supports TS 7</span></td><td class="st"><span class="chip c-idle">held</span></td></tr>
+          <tr><td class="id">#106</td><td>GitHub Sync design + plan <em>(draft)</em><span class="why">Blocked on four maintainer decisions. Draft replies prepared — two are corrections, not confirmations</span></td><td class="st"><span class="chip c-warn">needs decisions</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Nine closed this session: <strong>#133</strong> merged; <strong>#221</strong> (monaco) landed by hand with the migration it needed; and seven stale dependabot PRs closed with notes — six were already met or exceeded by develop's lockfile, and <strong>#237</strong> was unreachable dev-only tooling that could not resolve as proposed.</p>
+  </section>
+
+  <section>
+    <h2>Issues <span class="count">24 open · 10 already fixed on develop</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Issue</th><th>Title</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td class="id">#132</td><td>Server-side OTA for Thread devices</td><td class="st"><span class="chip c-ok">fixed dev.5</span></td></tr>
+          <tr><td class="id">#199</td><td>Per-target entities unavailable after HA restart</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#171</td><td>Static IP changes not picked up</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#197</td><td>Wrong IP addresses resolved</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#114</td><td>Add-on won't start (port 8765 clash)</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#204</td><td>Clearer diff</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#193</td><td>Install timeout not adjustable</td><td class="st"><span class="chip c-ok">fixed dev.3</span></td></tr>
+          <tr><td class="id">#240</td><td>Latest version not available</td><td class="st"><span class="chip c-ok">fixed 1.7.2</span></td></tr>
+          <tr><td class="id">#195</td><td>Centralized OTA via server</td><td class="st"><span class="chip c-ok">fixed dev.7</span></td></tr>
+          <tr><td class="id">#110</td><td>Separate device updates from compilation</td><td class="st"><span class="chip c-ok">fixed dev.7</span></td></tr>
+          <tr><td class="id">#167</td><td>Git remote / upstream</td><td class="st"><span class="chip c-acc">PR #106</span></td></tr>
+          <tr><td class="id">#148</td><td>Device grouping with tags<span class="why">Closed — 1.7.0 tag filtering covers it. Reply named the gap plainly: filtering, not collapsible group headers</span></td><td class="st"><span class="chip c-ok">closed</span></td></tr>
+          <tr><td class="id">#261</td><td>Missing options in Home Assistant</td><td class="st"><span class="chip c-warn">needs reply</span></td></tr>
+          <tr><td class="id">#154</td><td>External packages from git don't work</td><td class="st"><span class="chip c-crit">open bug</span></td></tr>
+          <tr><td class="id">&mdash;</td><td>11 further enhancement requests (#257 #238 #200 #191 #153 #152 #150 #141 #140 #137 #79)</td><td class="st"><span class="chip c-idle">backlog</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The ten marked <em>fixed</em> are shipped on <code>develop</code> but not in any release, so reporters still on 1.7.3 see no change. They are worth a comment now and a close at tag time — or closing now if you would rather the queue reflect the code.</p>
+  </section>
+
+  <section>
+    <h2>What blocks the release</h2>
+    <div class="callout crit">
+      <h3>Gold tier: two rules, one of them external</h3>
+      <p>Every <em>Gold</em> rule is now closed. What remains is <code>test-coverage</code> — the Silver ≥95% bar (QS.S1), and the real blocker since Gold requires Bronze + Silver + Gold — plus <code>brands</code>, which needs a PR to <code>home-assistant/brands</code> and is out of our hands. <code>strict-typing</code> is Platinum and explicitly not claimed this release.</p>
+    </div>
+    <div class="callout warn">
+      <h3>Internal bug numbers collide with GitHub numbers</h3>
+      <p>WORKITEMS uses <code>#NNN</code> for globally-monotonic internal bug IDs, but that is also how a GitHub reference reads — and GitHub issues and PRs share one counter. Internal <strong>#243</strong> and <strong>#247</strong> now collide with real dependabot PRs of the same number. Anyone reading the work items will follow those links to the wrong thing.</p>
+    </div>
+    <div class="callout">
+      <h3>The 1.8 theme is still ahead</h3>
+      <p>34 of 63 open items are the LLM workstreams that define this release. The bug list and the Gold walk are close to clear; the feature work has not started.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Hardware matrix <span class="count">1.8.0-dev.7 &middot; 10m 38s</span></h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Target</th><th>Install path</th><th>Deploy</th><th>Smoke</th></tr></thead>
+        <tbody>
+          <tr><td class="id">hass-4</td><td>HAOS add-on, always-on<span class="why">Full suite including the <code>@requires-ha</code> and <code>@requires-integration-config</code> slices</span></td><td class="st"><span class="chip c-ok">47s</span></td><td class="st"><span class="chip c-ok">21 / 24</span></td></tr>
+          <tr><td class="id">haos-pve</td><td>HAOS VM on Proxmox</td><td class="st"><span class="chip c-ok">4m 06s</span></td><td class="st"><span class="chip c-ok">21 / 21</span></td></tr>
+          <tr><td class="id">standalone-pve</td><td>Plain Docker, docker-compose</td><td class="st"><span class="chip c-ok">59s</span></td><td class="st"><span class="chip c-ok">11 / 11</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">hass-4's three non-passes are <strong>skips, not failures</strong> — <code>ha-services.spec.ts</code> self-skips without an HA long-lived token, and <code>~/.config/distributed-esphome/hass4-ha-token</code> does not exist. Pre-existing environment gap, unrelated to this work.</p>
+    <div class="callout">
+      <h3>Verified on live hardware</h3>
+      <p>The deploy restarts HA Core, which is exactly #199's trigger. Afterwards all <strong>434</strong> <code>esphome_fleet</code> entities were healthy — 0 unavailable, 0 missing — and still rendering proper display names, so the 22 translation-key migrations resolved rather than blanking. The count is unchanged from before the migration: no orphans, no duplicates.</p>
+      <p>The dev.7 run also caught #252's new probe firing on a real compile — <code>Connectivity check: 192.168.225.181:8266 reachable from this worker</code> — correctly resolving the ESP8266 port and proceeding with a local OTA. That is the default path for every WiFi device now, so seeing it work end to end matters more than the unit tests do. Add-on and HA Core logs clean on both runs.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Verification</h2>
+    <ul class="tight">
+      <li><strong>Test suite</strong> — 1144 passing, +67 against the session baseline, zero non-environmental regressions. The 185 failures are <code>SocketBlockedError</code> from the sandbox and are byte-identical to the pre-session baseline.</li>
+      <li><strong>Gates</strong> — ruff clean, mypy client clean, invariants 18/18, 198/198 mocked Playwright, <code>npm audit</code> 0 vulnerabilities.</li>
+      <li><strong>Known pre-existing</strong> — one mypy error in <code>ui_api.py:1219</code>, untouched by this work; 3 ruff E402 in the integration's <code>__init__.py</code>, outside the enforced gate.</li>
+      <li><strong>Not verified by machine</strong> — Monaco render-level behaviour (YAML colours, find widget, diff folding) and the Thread OTA path, which needs a Thread device.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>develop @ 6b1f932 · 1.8.0-dev.7</span>
+    <span>measured from the repository</span>
+  </footer>
+
+</div>
