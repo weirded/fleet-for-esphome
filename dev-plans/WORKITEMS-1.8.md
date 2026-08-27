@@ -98,6 +98,48 @@ Largely as scoped before — adapted to ride on LL.* (LiteLLM, structured output
 
 - [x] **#247** *(1.8.0-dev.6)* — *A compile started while ESPHome is still lazy-installing failed with "Fix the YAML error above", pointing the user at a config that is fine.* `api.py` answered **every** `create_bundle_async` failure with the same tail. The code comment was honest that *"most failures here are real YAML-schema problems"* — but *most* isn't *all*, and bundling imports the server's own lazy-installed ESPHome, so a job dispatched inside the 1–3 minute install window died with `ModuleNotFoundError: No module named 'esphome'` and was then blamed on the YAML. **Fixed by requeueing, not rewording.** The item floated auto-requeue as the stronger option and that's what landed: the server already knows the install is in flight, so `JobQueue.release_for_retry()` puts the job back to `PENDING`, clears the assignment, and returns 204 to the worker, which polls again a few seconds later and succeeds. Bounded by the same `MAX_RETRIES` as the timeout path, so a genuinely stuck install still lands on a real failure — with an honest message that says the *server's* install didn't come up, not that the config is broken. **Detection is deliberately narrow.** The bundle runs in a subprocess, so the `ModuleNotFoundError` arrives as stderr text wrapped in a `RuntimeError` rather than a catchable type; `scanner.esphome_import_error()` matches that text, and `scanner.esphome_install_in_flight()` distinguishes *installing* from *install failed* (`_esphome_ready` is unset for both — only the first is transient). Treating every failure during the window as transient would swallow a real YAML error a user happened to hit at the wrong moment, so a genuine validation failure keeps the original wording — there's a regression test asserting exactly that. **Why it mattered enough to fix now:** the trigger is "upstream ESPHome published a release since your last smoke", which happens roughly monthly, and it cost a full matrix re-run twice in this cycle alone (2026-07-28 and 2026-08-24). 11 tests in `tests/test_install_window_requeue.py` covering both scanner predicates, the requeue, the retry cap, and the not-WORKING / unknown-job guards.
 
+## Issue & PR triage
+
+State of the public tracker as of `1.8.0-dev.7`. Kept here rather than anywhere
+else so `dev-plans/` stays the single source of truth — this section is the thing
+to update, not a dashboard somewhere.
+
+### Fixed on `develop`, not yet released
+
+These are done in code and verified, but every reporter is still on 1.7.3 and sees
+no change. Comment when useful; **close them at tag time** — there is now a
+post-release checklist step for exactly this, so it shouldn't depend on anyone
+remembering.
+
+| Issue | Fixed in | What the reporter sees |
+|---|---|---|
+| [#132](https://github.com/weirded/fleet-for-esphome/issues/132) | dev.5 | Thread/Matter devices can be flashed from a remote worker |
+| [#195](https://github.com/weirded/fleet-for-esphome/issues/195) | dev.7 | Worker that can't reach a device hands the OTA to the add-on |
+| [#110](https://github.com/weirded/fleet-for-esphome/issues/110) | dev.7 | Same — compile and flash are now separable |
+| [#199](https://github.com/weirded/fleet-for-esphome/issues/199) | dev.3 | Per-target/per-worker entities survive an HA restart |
+| [#171](https://github.com/weirded/fleet-for-esphome/issues/171) | dev.3 | A static-IP edit in YAML reaches the Devices tab |
+| [#197](https://github.com/weirded/fleet-for-esphome/issues/197) | dev.3 | Displayed IP no longer disagrees with the OTA target |
+| [#114](https://github.com/weirded/fleet-for-esphome/issues/114) | dev.3 | Port clash names the conflicting add-on instead of looking like a stop |
+| [#204](https://github.com/weirded/fleet-for-esphome/issues/204) | dev.3 | Diff collapses unchanged runs and marks changes in the scrollbar |
+| [#193](https://github.com/weirded/fleet-for-esphome/issues/193) | dev.3 | `ESPHOME_INSTALL_TIMEOUT` raises the pip-install ceiling |
+| [#240](https://github.com/weirded/fleet-for-esphome/issues/240) | 1.7.2 + dev.3 | Root cause shipped in 1.7.2; dev.3 replaced the misleading message |
+
+### Open pull requests
+
+| PR | State | Blocked on |
+|---|---|---|
+| [#225](https://github.com/weirded/fleet-for-esphome/pull/225) | Held | TypeScript 7 builds clean and emits a byte-identical bundle, but `typescript-eslint` crashes on it and no release supports TS 7 (all cap at `<6.1.0`). Removing it is worse — it supplies eslint's TS *parser*, so `npm run lint` drops to 117 parse errors. Revisit when upstream ships support; the migration itself is a no-op. |
+| [#106](https://github.com/weirded/fleet-for-esphome/pull/106) | Draft, needs maintainer decisions | Four questions from @moellere on GitHub Sync (serves #167): token storage, push debounce, auth backends, PR shape. Two carry corrections — `settings.json` is **not** Supervisor-encrypted, and GS.5's `.gitignore` guard must land *with* GS.2 rather than after it, because `_ensure_gitignore()` only runs on fresh `git init` and the GS user is by definition the pre-existing-repo user. Also: **no image ships an SSH client**, so SSH auth needs an apt-layer change plus a PY-4 bump; PAT-over-HTTPS needs neither. |
+
+### Open issues needing a reply, not code
+
+- **[#148](https://github.com/weirded/fleet-for-esphome/issues/148)** — device grouping by tag. The 1.7.0 tagging work appears to cover this; ask the reporter to confirm before closing.
+- **[#261](https://github.com/weirded/fleet-for-esphome/issues/261)** — reporter is looking for a `remote_builders:` YAML option that has never existed; they were following AI-generated instructions. Needs a pointer to how workers are actually configured.
+
+### Open bug worth real investigation
+
+- **[#154](https://github.com/weirded/fleet-for-esphome/issues/154)** — `packages:` pulled from a git URL fail on every worker with a missing-`secrets.yaml` error, while the stock ESPHome add-on handles them. Four reporters. One comment notes that *validating* the config first makes the packages resolve correctly, which points at bundle-time ordering rather than the git fetch itself. Not picked up this cycle because it needs a real remote-package repro to tell whether `ConfigBundleCreator` or the worker slot layout is at fault — guessing would be worse than leaving it.
+
 ## Carried forward from 1.7.2 (Honest Gold + i18n)
 
 *Deferred from 1.7.2, which shipped as a focused ESPHome-2026.7 + polish release. The quality-scale Gold tier flip, its gates, the test-hardening workstream, and the i18n string-extraction + German translation land here. Item IDs and cross-references (QS.*, HT.*, TP.3, CI.4/6, SD.2/3, I18N.3–12) are preserved verbatim.*
