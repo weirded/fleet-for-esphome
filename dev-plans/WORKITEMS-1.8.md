@@ -133,7 +133,7 @@ remembering.
 
 ### Open issues needing a reply, not code
 
-- **[#148](https://github.com/weirded/fleet-for-esphome/issues/148)** — device grouping by tag. The 1.7.0 tagging work appears to cover this; ask the reporter to confirm before closing.
+- ~~**[#148](https://github.com/weirded/fleet-for-esphome/issues/148)**~~ **CLOSED** — device grouping by tag; the 1.7.0 tagging work covers it. Replied with what actually shipped (tags column, click-to-edit, bulk edit, filter pills with AND logic across selections) and flagged the one honest gap: it is *filtering*, not collapsible group headers with devices nested underneath. Called that out explicitly rather than closing it as a clean duplicate, and invited a reopen if the sectioned view was the actual ask — with the reason it landed as filtering, namely that a device can carry several tags, so real grouping has to decide whether a two-tag device appears twice or picks one home. That design question is the live part if it ever comes back.
 - **[#261](https://github.com/weirded/fleet-for-esphome/issues/261)** — reporter is looking for a `remote_builders:` YAML option that has never existed; they were following AI-generated instructions. Needs a pointer to how workers are actually configured.
 
 ### Open bug worth real investigation
