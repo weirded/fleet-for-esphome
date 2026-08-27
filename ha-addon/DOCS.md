@@ -56,6 +56,78 @@ Typical uses:
 
 Workers install whatever ESPHome version each job asks for, on demand, into a local per-version cache so subsequent jobs using that version start instantly. The cache is bounded by the per-worker disk quota (default 10 GiB, change in **Settings → Disk management**) and evicts the oldest things first when the budget fills up — see the **Workers tab** for live disk usage.
 
+### Adding a build worker
+
+**Start here: you may not need one.** The add-on already runs a *built-in local
+worker* on your Home Assistant machine, and it compiles everything on its own.
+Add a second worker when builds are slow because HA runs on modest hardware (a
+Pi), when you want several devices compiling at once, or when you'd rather your
+HA box wasn't doing the heavy lifting. If compiles finish in a time you're happy
+with, you're done — no worker needed.
+
+**What a worker actually is.** A Docker container that you start on another
+computer. When it starts, it *calls out* to Fleet over HTTP on port **8765**,
+proves who it is with a shared token, and then asks for jobs. Fleet never
+connects *to* it, so:
+
+- **SSH is not involved anywhere.** Not port 22, not port 2222. If you changed an
+  SSH port hoping to connect a worker, change it back — it has no effect on Fleet.
+- **There is no `remote_builders:` setting**, and no YAML anywhere that lists your
+  workers. A worker appears in the **Workers** tab by connecting; that's the whole
+  registration mechanism.
+- **No port forwarding is needed** for the worker machine. It has to be able to
+  *reach* your HA machine on 8765, and to reach your ESP devices on the network in
+  order to flash them.
+
+**What the worker machine needs.** A normal desktop operating system with Docker
+installed: Linux (Debian, Ubuntu, anything), macOS, or Windows.
+
+> ⚠️ **Home Assistant OS is not a suitable worker machine.** HAOS is a locked-down
+> appliance that only runs Home Assistant add-ons — you cannot start your own
+> containers on it. If you have a spare laptop or mini-PC you want to use as a
+> build machine, install ordinary **Debian or Ubuntu** on it plus Docker, not
+> HAOS. (Installing HAOS on a second machine gives you a second Home Assistant,
+> which is not what you want here.)
+
+**Steps.**
+
+1. On the machine that will do the building, install Docker. On Debian/Ubuntu:
+   `curl -fsSL https://get.docker.com | sh`
+2. In Home Assistant, open Fleet → **Workers** tab → **+ Connect Worker**.
+3. Pick your format (Linux/macOS shell, PowerShell, or Docker Compose). The
+   dialog writes out a complete command with your server URL and token already
+   filled in — you don't have to work any of it out.
+4. Copy it, paste it into a terminal on the build machine, run it.
+5. Back in the **Workers** tab, the machine shows up within a few seconds. If it
+   doesn't, see below.
+
+That's the whole process. The command it gives you looks roughly like this, but
+**use the one the dialog generates** — yours carries the right token:
+
+```bash
+docker run -d \
+  --name esphome-worker \
+  --restart unless-stopped \
+  --network host \
+  -e SERVER_URL=http://homeassistant.local:8765 \
+  -e SERVER_TOKEN=<your token> \
+  -v esphome-versions:/esphome-versions \
+  ghcr.io/weirded/esphome-dist-client:latest
+```
+
+`--network host` matters: without it the container sits on Docker's internal
+network and can't reach your ESP devices, so builds succeed and flashing fails.
+
+**If the worker doesn't appear.** Check, in order:
+
+- Is it running? `docker ps` on the build machine should list it. If not,
+  `docker logs esphome-worker` says why.
+- Can it reach HA? From the build machine, `curl http://homeassistant.local:8765`
+  should answer something rather than hang. If it hangs, use HA's IP address
+  instead of `homeassistant.local` — mDNS names don't resolve on every network.
+- Wrong token? The worker log says so plainly. Re-copy the command from
+  **+ Connect Worker**.
+
 ### Keeping workers up to date
 
 The worker's Python source auto-updates from the server — every heartbeat negotiates the current client source revision and the worker rewrites its `.py` files in place when the server's copy is newer. Bug fixes and protocol-compatible additions to client code reach every worker (local and remote) without you touching the container. The **Docker image** is the part that doesn't auto-update: system packages (gcc, git, libffi), the Python interpreter itself, and hash-pinned dependencies only refresh when you pull a new image. The built-in local worker picks up a fresh image whenever the add-on upgrades; a remote worker you started with `docker run` stays on whatever image tag you pulled until you refresh it yourself.
