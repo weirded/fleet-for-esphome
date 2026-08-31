@@ -9,7 +9,7 @@ apscheduler>=3.11.3,<4
 # detect a 46.x behaviour change on the live device-polling path. Floor
 # bumped to the version dependabot asked for; the 46.x move gets its own
 # evaluation. See DEP.3 in dev-plans/WORKITEMS-1.8.md.
-aioesphomeapi>=45.12.1,<46
+aioesphomeapi>=46.2.1,<47
 zeroconf>=0.150.0
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
