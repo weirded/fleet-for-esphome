@@ -10,7 +10,7 @@ apscheduler>=3.11.3,<4
 # bumped to the version dependabot asked for; the 46.x move gets its own
 # evaluation. See DEP.3 in dev-plans/WORKITEMS-1.8.md.
 aioesphomeapi>=45.12.1,<46
-zeroconf>=0.150.0
+zeroconf>=0.151.3
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
 # boot, scanner.ensure_esphome_installed lazy-installs the HA ESPHome
