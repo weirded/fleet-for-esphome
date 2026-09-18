@@ -1617,3 +1617,23 @@ def test_collect_firmware_variants_missing_returns_empty(tmp_path, caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("No firmware binary found" in m for m in warnings), warnings
     assert any(".pioenvs" in m and "build/" in m for m in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# Worker lifecycle: a clean shutdown keeps the persisted client_id so the
+# next start re-attaches to the same registry row instead of minting a
+# fresh UUID (which would leave a duplicate row behind on the server).
+# ---------------------------------------------------------------------------
+
+def test_deregister_keeps_persisted_client_id(tmp_path, monkeypatch):
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    id_file = tmp_path / ".client_id"
+    id_file.write_text("keep-me")
+    monkeypatch.setattr(client_mod, "_CLIENT_ID_FILE", str(id_file))
+    ok_resp = MagicMock(ok=True, status_code=200)
+    monkeypatch.setattr(client_mod, "post", lambda *a, **k: ok_resp)
+
+    client_mod.deregister("keep-me")
+
+    assert id_file.read_text() == "keep-me"

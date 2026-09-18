@@ -175,6 +175,10 @@ async def _register_worker_handler(request: web.Request) -> web.Response:
         resolved_quota = msg.disk_quota_bytes
 
     registry = request.app["registry"]
+    # Adoption of an offline same-hostname row (registry.register) uses the
+    # same offline threshold the UI does, so "offline" means the same thing
+    # in both places.
+    from settings import get_settings as _get_settings  # noqa: PLC0415
     client_id = registry.register(
         msg.hostname,
         msg.platform,
@@ -185,6 +189,7 @@ async def _register_worker_handler(request: web.Request) -> web.Response:
         image_version=msg.image_version,
         tags=resolved_tags,
         disk_quota_bytes=resolved_quota,
+        offline_threshold_secs=_get_settings().worker_offline_threshold,
     )
     # TG.3: a new worker (or one re-registering with different tags)
     # may unblock or newly-block PENDING jobs. Fire-and-forget — the
@@ -277,18 +282,21 @@ def _image_version_ok(reported: Optional[str]) -> bool:
 
 
 async def _deregister_handler(request: web.Request) -> web.Response:
-    """Remove a worker from the registry on clean shutdown."""
+    """Clean worker shutdown: mark it offline immediately but keep the row.
+
+    Workers only leave the registry when the operator deletes them from
+    the Workers tab — a shutdown is not a deletion.
+    """
     msg, err = await _parse_body(request, DeregisterRequest)
     if err is not None:
         return err
     assert msg is not None
 
     registry = request.app["registry"]
-    # #94: capture hostname before remove() drops it from the registry.
     worker = registry.get(msg.client_id)
     hostname = worker.hostname if worker else "?"
-    if registry.remove(msg.client_id):
-        logger.info("Worker %s [%s] deregistered (clean shutdown)", hostname, msg.client_id)
+    if registry.mark_stopped(msg.client_id):
+        logger.info("Worker %s [%s] deregistered (clean shutdown) — kept in registry", hostname, msg.client_id)
         # TG.3: a worker leaving the pool may push PENDING jobs to BLOCKED.
         from routing_eligibility import fire_and_forget  # noqa: PLC0415
         fire_and_forget(request.app)

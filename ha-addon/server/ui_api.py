@@ -3406,12 +3406,19 @@ async def retry_jobs(request: web.Request) -> web.Response:
 
 
 async def _remove_worker_handler(request: web.Request, client_id: str) -> web.Response:
-    """Remove an offline worker from the registry."""
+    """Delete an offline worker — the only way a worker leaves the registry.
+
+    Online workers are refused: a running worker would simply re-register
+    on its next heartbeat, so deleting it would be a no-op with a confusing
+    flicker. The UI disables the menu item with the same hint.
+    """
     registry = request.app["registry"]
     from settings import get_settings as _gs  # noqa: PLC0415
 
     if registry.is_online(client_id, _gs().worker_offline_threshold):
-        return web.json_response({"error": "Cannot remove an online worker"}, status=409)
+        return web.json_response(
+            {"error": "Cannot delete an online worker — stop it first"}, status=409,
+        )
     if not registry.remove(client_id):
         return web.json_response({"error": "Unknown client_id"}, status=404)
     return web.json_response({"ok": True})

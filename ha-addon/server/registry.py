@@ -1,14 +1,30 @@
-"""Build worker registry — in-memory, no persistence needed."""
+"""Build worker registry — in-memory, mirrored to ``/data/workers.json``.
+
+Lifecycle rule: a worker stays in the registry until the operator deletes
+it. Neither a clean worker shutdown (``mark_stopped``) nor an add-on
+restart (``load``) drops an entry — both just leave it offline until the
+next heartbeat.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+_SCHEMA_VERSION = 1
+# Heartbeats arrive every ~10 s per worker; persisting each one would be
+# wasteful. ``last_seen`` is flushed at most this often so the "offline
+# for" display survives a crash without a per-heartbeat disk write.
+_HEARTBEAT_SAVE_INTERVAL_SECS = 60.0
 
 
 def _utcnow() -> datetime:
@@ -56,6 +72,10 @@ class Worker:
     # request. Use ``effective_disk_quota_bytes(default)`` to resolve the
     # value the worker should actually enforce against.
     disk_quota_bytes: Optional[int] = None
+    # Set by a clean worker shutdown (deregister). Forces ``is_online`` to
+    # False immediately instead of waiting out the offline threshold, and
+    # clears on the next heartbeat / registration. The entry itself stays.
+    stopped: bool = False
 
     def effective_disk_quota_bytes(self, default_bytes: int) -> int:
         """Return the override if set, else the supplied fleet default."""
@@ -82,6 +102,50 @@ class Worker:
             # fleet default is in scope.
             "disk_quota_override_bytes": self.disk_quota_bytes,
         }
+
+    def to_persist_dict(self) -> dict:
+        """Durable subset of the worker: everything except in-flight job state."""
+        return {
+            "client_id": self.client_id,
+            "hostname": self.hostname,
+            "platform": self.platform,
+            "last_seen": self.last_seen.isoformat(),
+            "disabled": self.disabled,
+            "client_version": self.client_version,
+            "image_version": self.image_version,
+            "max_parallel_jobs": self.max_parallel_jobs,
+            "requested_max_parallel_jobs": self.requested_max_parallel_jobs,
+            "pending_clean": self.pending_clean,
+            "system_info": self.system_info,
+            "tags": list(self.tags),
+            "disk_quota_bytes": self.disk_quota_bytes,
+            "stopped": self.stopped,
+        }
+
+    @classmethod
+    def from_persist_dict(cls, d: dict) -> "Worker":
+        """Inverse of ``to_persist_dict``. Raises on a malformed entry."""
+        last_seen_raw = d.get("last_seen")
+        last_seen = datetime.fromisoformat(last_seen_raw) if isinstance(last_seen_raw, str) else _utcnow()
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        tags = d.get("tags")
+        return cls(
+            client_id=str(d["client_id"]),
+            hostname=str(d.get("hostname") or ""),
+            platform=str(d.get("platform") or ""),
+            last_seen=last_seen,
+            disabled=bool(d.get("disabled", False)),
+            client_version=d.get("client_version"),
+            image_version=d.get("image_version"),
+            max_parallel_jobs=int(d.get("max_parallel_jobs", 1)),
+            requested_max_parallel_jobs=d.get("requested_max_parallel_jobs"),
+            pending_clean=bool(d.get("pending_clean", False)),
+            system_info=d.get("system_info") if isinstance(d.get("system_info"), dict) else None,
+            tags=[t for t in tags if isinstance(t, str)] if isinstance(tags, list) else [],
+            disk_quota_bytes=d.get("disk_quota_bytes"),
+            stopped=bool(d.get("stopped", False)),
+        )
 
     def evaluate_health(self) -> bool:
         """Recompute ``health_blocked_reason`` from ``system_info`` (#219, + absolute-floor fix).
@@ -142,10 +206,92 @@ class Worker:
 
 
 class WorkerRegistry:
-    """Tracks connected build workers."""
+    """Tracks build workers. Entries persist until explicitly removed."""
 
-    def __init__(self) -> None:
+    def __init__(self, path: str | Path | None = None) -> None:
         self._workers: dict[str, Worker] = {}
+        self._path: Optional[Path] = Path(path) if path is not None else None
+        self._last_saved_at: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self) -> None:
+        """Atomically write every worker to ``path``. No-op without a path."""
+        if self._path is None:
+            return
+        payload = {
+            "version": _SCHEMA_VERSION,
+            "workers": [w.to_persist_dict() for w in self._workers.values()],
+        }
+        tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp.replace(self._path)
+            self._last_saved_at = time.monotonic()
+        except OSError:
+            logger.exception("Failed to persist worker registry to %s", self._path)
+
+    def load(self) -> None:
+        """Restore workers from ``path``. Tolerates a missing or corrupt file.
+
+        In-flight job state is not restored — the queue's own restart
+        recovery resets WORKING jobs to PENDING, so ``current_job_id``
+        starts empty and refills as workers claim.
+        """
+        if self._path is None:
+            return
+        try:
+            raw = self._path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return
+        except OSError:
+            logger.exception("Failed to read worker registry %s; starting empty", self._path)
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.error("Worker registry %s is corrupt; starting empty", self._path)
+            return
+        if not isinstance(data, dict) or data.get("version") != _SCHEMA_VERSION:
+            logger.error("Worker registry %s has unknown schema; starting empty", self._path)
+            return
+        entries = data.get("workers")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                worker = Worker.from_persist_dict(entry)
+            except Exception:
+                logger.error("Skipping malformed worker entry %r", entry.get("client_id"), exc_info=True)
+                continue
+            self._workers[worker.client_id] = worker
+        logger.info("Restored %d worker(s) from %s", len(self._workers), self._path)
+
+    def _persist(self) -> None:
+        """Save + broadcast — the tail of every durable mutation."""
+        self.save()
+        _broadcast_workers_changed()
+
+    def _find_offline_by_hostname(self, hostname: str, threshold_secs: int) -> Optional[Worker]:
+        """First offline worker with this hostname, or None.
+
+        Used when a worker registers without a persisted client_id: rather
+        than minting a new UUID (and leaving the old row behind forever),
+        the fresh registration takes over the offline row. Online rows are
+        never adopted — two live workers may legitimately share a hostname.
+        """
+        for w in self._workers.values():
+            if w.hostname == hostname and not self.is_online(w.client_id, threshold_secs):
+                return w
+        return None
 
     def register(
         self,
@@ -158,6 +304,7 @@ class WorkerRegistry:
         image_version: Optional[str] = None,
         tags: Optional[list[str]] = None,
         disk_quota_bytes: Optional[int] = None,
+        offline_threshold_secs: int = 30,
     ) -> str:
         """Register a worker. Returns client_id.
 
@@ -165,7 +312,19 @@ class WorkerRegistry:
         doesn't remember the worker (e.g. add-on restart wiped in-memory
         state). This preserves device-registry identity across server
         restarts so HA doesn't end up with duplicate worker devices (#49).
+
+        Without an id, an offline worker with the same hostname is adopted
+        (its client_id is handed back) so a wiped volume or an older client
+        that discarded its id on shutdown doesn't leave a duplicate row.
         """
+        if not existing_client_id:
+            adopted = self._find_offline_by_hostname(hostname, offline_threshold_secs)
+            if adopted is not None:
+                logger.info(
+                    "Worker %s registered without an id; adopting offline entry %s",
+                    hostname, adopted.client_id,
+                )
+                existing_client_id = adopted.client_id
         if existing_client_id:
             client_id = existing_client_id
             worker = self._workers.get(client_id)
@@ -178,6 +337,7 @@ class WorkerRegistry:
                 if worker.requested_max_parallel_jobs == max_parallel_jobs:
                     worker.requested_max_parallel_jobs = None
                 worker.last_seen = _utcnow()
+                worker.stopped = False
                 if system_info is not None:
                     worker.system_info = system_info
                 if tags is not None:
@@ -212,7 +372,7 @@ class WorkerRegistry:
                     client_id, hostname, platform, client_version or "?",
                     image_version or "?", max_parallel_jobs,
                 )
-            _broadcast_workers_changed()
+            self._persist()
             return client_id
 
         client_id = str(uuid.uuid4())
@@ -233,7 +393,7 @@ class WorkerRegistry:
             client_id, hostname, platform, client_version or "?",
             image_version or "?", max_parallel_jobs,
         )
-        _broadcast_workers_changed()
+        self._persist()
         return client_id
 
     def heartbeat(self, client_id: str, system_info: Optional[dict] = None) -> bool:
@@ -242,6 +402,9 @@ class WorkerRegistry:
         if worker is None:
             return False
         worker.last_seen = _utcnow()
+        if worker.stopped:
+            worker.stopped = False
+            _broadcast_workers_changed()
         if system_info is not None:
             worker.system_info = system_info
             # #219: re-evaluate the disk-pressure self-pause state on every
@@ -255,6 +418,19 @@ class WorkerRegistry:
                     system_info.get("disk_used_pct"),
                 )
                 _broadcast_workers_changed()
+        if time.monotonic() - self._last_saved_at >= _HEARTBEAT_SAVE_INTERVAL_SECS:
+            self.save()
+        return True
+
+    def mark_stopped(self, client_id: str) -> bool:
+        """Clean worker shutdown: keep the entry, flip it offline now. False if unknown."""
+        worker = self._workers.get(client_id)
+        if worker is None:
+            return False
+        worker.stopped = True
+        worker.current_job_id = None
+        logger.info("Worker %s (%s) stopped (clean shutdown) — kept in registry", client_id, worker.hostname)
+        self._persist()
         return True
 
     def set_job(self, client_id: str, job_id: Optional[str]) -> bool:
@@ -270,7 +446,7 @@ class WorkerRegistry:
 
     def is_online(self, client_id: str, threshold_secs: int = 30) -> bool:
         worker = self._workers.get(client_id)
-        if worker is None:
+        if worker is None or worker.stopped:
             return False
         elapsed = (_utcnow() - worker.last_seen).total_seconds()
         return elapsed <= threshold_secs
@@ -286,7 +462,7 @@ class WorkerRegistry:
         if worker is None:
             return False
         worker.tags = list(tags)
-        _broadcast_workers_changed()
+        self._persist()
         return True
 
     def set_disk_quota(self, client_id: str, quota_bytes: Optional[int]) -> bool:
@@ -301,7 +477,7 @@ class WorkerRegistry:
         if worker is None:
             return False
         worker.disk_quota_bytes = quota_bytes
-        _broadcast_workers_changed()
+        self._persist()
         return True
 
     def set_disabled(self, client_id: str, disabled: bool) -> bool:
@@ -311,7 +487,7 @@ class WorkerRegistry:
             return False
         worker.disabled = disabled
         logger.info("Worker %s (%s) %s", client_id, worker.hostname, "disabled" if disabled else "enabled")
-        _broadcast_workers_changed()
+        self._persist()
         return True
 
     def remove(self, client_id: str) -> bool:
@@ -320,7 +496,7 @@ class WorkerRegistry:
         if worker is None:
             return False
         logger.info("Removed worker %s (%s)", client_id, worker.hostname)
-        _broadcast_workers_changed()
+        self._persist()
         return True
 
     def get(self, client_id: str) -> Optional[Worker]:

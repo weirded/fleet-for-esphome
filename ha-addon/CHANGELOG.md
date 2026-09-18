@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-*(1.8.0 development — nothing user-facing yet.)*
+**Workers stay in the list until you delete them.** Previously a build worker vanished from the Workers tab the moment it shut down cleanly, and every worker disappeared whenever the add-on restarted — so a worker you'd tagged and configured could silently drop out of view, and a worker that came back after a wipe showed up as a second, duplicate row. Now the worker list is saved to disk and survives restarts, a stopped worker simply shows as offline with how long it's been gone, and a worker returning without its saved identity takes over its old row instead of creating a new one. The per-row Actions menu gains a **Delete** item, which is the only way a worker leaves the list; it's disabled with an explanation while the worker is online (a running worker would just re-register) and for the built-in worker. Remote workers pick up the matching client-side change through the usual automatic source update — no image rebuild needed.
 
 ## 1.7.3
 

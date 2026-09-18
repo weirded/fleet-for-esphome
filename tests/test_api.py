@@ -1125,7 +1125,8 @@ async def test_legacy_heartbeat_route_works(tmp_path):
 # Deregistration
 # ---------------------------------------------------------------------------
 
-async def test_deregister_removes_worker(tmp_path):
+async def test_deregister_keeps_worker_but_marks_it_offline(tmp_path):
+    """Clean shutdown must not drop the row — workers only leave when deleted."""
     ta = await _make_app(tmp_path)
     try:
         client_id = await _register(ta)
@@ -1136,7 +1137,27 @@ async def test_deregister_removes_worker(tmp_path):
         )
         assert resp.status == 200
         assert (await resp.json())["ok"] is True
-        assert ta.registry.get(client_id) is None
+        assert ta.registry.get(client_id) is not None
+        assert ta.registry.is_online(client_id) is False
+    finally:
+        await ta.close()
+
+
+async def test_register_without_id_after_deregister_reuses_row(tmp_path):
+    """Older clients discard their id on shutdown; the same hostname must
+    take over the stopped row instead of leaving a duplicate behind."""
+    ta = await _make_app(tmp_path)
+    try:
+        first = await _register(ta)
+        await ta.post(
+            "/api/v1/workers/deregister",
+            json={"client_id": first},
+            headers=AUTH_HEADERS,
+        )
+        second = await _register(ta)
+        assert second == first
+        assert len(ta.registry.get_all()) == 1
+        assert ta.registry.is_online(first) is True
     finally:
         await ta.close()
 

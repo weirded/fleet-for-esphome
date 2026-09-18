@@ -1451,7 +1451,11 @@ def create_app() -> web.Application:
     queue = JobQueue(history=job_history)
     queue.load()
 
-    registry = WorkerRegistry()
+    # Workers persist until the operator deletes them from the Workers
+    # tab — an add-on restart restores the list (offline until each
+    # worker's next heartbeat) instead of starting empty.
+    registry = WorkerRegistry(path="/data/workers.json")
+    registry.load()
 
     # SP.8: device_poll_interval is now settings-driven. Pass the
     # current value as the initial interval; DevicePoller re-reads
@@ -1769,6 +1773,10 @@ def create_app() -> web.Application:
                     await task
                 except asyncio.CancelledError:
                     pass
+
+        # Flush the latest heartbeat timestamps so "offline for" is
+        # accurate after the restart (heartbeat saves are throttled).
+        registry.save()
 
         # #87: stop APScheduler
         import scheduler as scheduler_module  # noqa: PLC0415

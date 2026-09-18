@@ -350,3 +350,106 @@ def test_heartbeat_disk_free_bytes_non_numeric_falls_back_to_percentage_only(reg
         system_info={"disk_used_pct": 96, "disk_free_bytes": "not-a-number"},
     )
     assert reg.get(client_id).health_blocked_reason == "disk_full"
+# Lifecycle: workers persist until deleted
+# ---------------------------------------------------------------------------
+
+def test_registry_persists_workers_across_instances(tmp_path):
+    path = tmp_path / "workers.json"
+    reg1 = WorkerRegistry(path=path)
+    client_id = reg1.register("host1", "linux/amd64", tags=["gpu"])
+    reg1.set_disabled(client_id, True)
+
+    reg2 = WorkerRegistry(path=path)
+    reg2.load()
+    worker = reg2.get(client_id)
+    assert worker is not None
+    assert worker.hostname == "host1"
+    assert worker.platform == "linux/amd64"
+    assert worker.tags == ["gpu"]
+    assert worker.disabled is True
+
+
+def test_loaded_workers_drop_transient_job_state(tmp_path):
+    path = tmp_path / "workers.json"
+    reg1 = WorkerRegistry(path=path)
+    client_id = reg1.register("host1", "linux/amd64")
+    reg1.set_job(client_id, "job-1")
+    reg1.save()
+
+    reg2 = WorkerRegistry(path=path)
+    reg2.load()
+    assert reg2.get(client_id).current_job_id is None
+
+
+def test_remove_is_persisted(tmp_path):
+    path = tmp_path / "workers.json"
+    reg1 = WorkerRegistry(path=path)
+    client_id = reg1.register("host1", "linux/amd64")
+    reg1.remove(client_id)
+
+    reg2 = WorkerRegistry(path=path)
+    reg2.load()
+    assert reg2.get(client_id) is None
+
+
+def test_load_tolerates_missing_and_corrupt_file(tmp_path):
+    reg = WorkerRegistry(path=tmp_path / "missing.json")
+    reg.load()
+    assert reg.get_all() == []
+
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text("{not json")
+    reg = WorkerRegistry(path=corrupt)
+    reg.load()
+    assert reg.get_all() == []
+
+
+def test_heartbeat_persists_last_seen_when_save_is_due(tmp_path):
+    path = tmp_path / "workers.json"
+    reg1 = WorkerRegistry(path=path)
+    client_id = reg1.register("host1", "linux/amd64")
+    from datetime import datetime, timedelta, timezone
+    reg1.get(client_id).last_seen = datetime.now(timezone.utc) - timedelta(hours=1)
+    reg1.save()
+    reg1._last_saved_at = 0.0  # force the throttled heartbeat save to fire
+    reg1.heartbeat(client_id)
+
+    reg2 = WorkerRegistry(path=path)
+    reg2.load()
+    assert reg2.is_online(client_id, threshold_secs=30) is True
+
+
+def test_mark_stopped_keeps_worker_but_makes_it_offline(reg):
+    client_id = reg.register("host1", "linux/amd64")
+    assert reg.mark_stopped(client_id) is True
+    assert reg.get(client_id) is not None
+    assert reg.is_online(client_id, threshold_secs=30) is False
+
+
+def test_mark_stopped_unknown_returns_false(reg):
+    assert reg.mark_stopped("ghost") is False
+
+
+def test_heartbeat_after_mark_stopped_brings_worker_back_online(reg):
+    client_id = reg.register("host1", "linux/amd64")
+    reg.mark_stopped(client_id)
+    reg.heartbeat(client_id)
+    assert reg.is_online(client_id, threshold_secs=30) is True
+
+
+def test_register_without_id_adopts_offline_worker_with_same_hostname(reg):
+    first = reg.register("host1", "linux/amd64", tags=["gpu"])
+    reg.mark_stopped(first)
+    second = reg.register("host1", "linux/arm64")
+    assert second == first
+    assert len(reg.get_all()) == 1
+    worker = reg.get(first)
+    assert worker.platform == "linux/arm64"
+    assert reg.is_online(first, threshold_secs=30) is True
+
+
+def test_register_without_id_does_not_adopt_online_worker_with_same_hostname(reg):
+    first = reg.register("host1", "linux/amd64")
+    second = reg.register("host1", "linux/amd64")
+    assert second != first
+    assert len(reg.get_all()) == 2

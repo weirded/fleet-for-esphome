@@ -671,7 +671,7 @@ export default function App() {
   async function handleRemoveWorker(id: string) {
     try {
       await removeWorker(id);
-      addToast('Worker removed', 'success');
+      addToast('Worker deleted', 'success');
       mutateWorkers();
     } catch (err) {
       addToast('Error: ' + (err as Error).message, 'error');

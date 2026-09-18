@@ -399,6 +399,16 @@ export function WorkersTab({ workers, targets, queue, serverClientVersion, minIm
   for (const c of sortedWorkers) {
     const slots = c.max_parallel_jobs ?? 0;
     const isLocal = c.hostname === LOCAL_WORKER_HOSTNAME;
+    // Workers never leave the list on their own — not on a clean shutdown,
+    // not on an add-on restart. Delete is the only exit, so the item is
+    // always rendered; it's disabled (with the reason as a tooltip) when
+    // deleting would be pointless: a running worker re-registers on its
+    // next heartbeat, and the built-in worker is respawned by the add-on.
+    const deleteBlockedReason = isLocal
+      ? "The built-in worker can't be deleted"
+      : c.online
+        ? 'Stop the worker first — a running worker re-registers on its next heartbeat'
+        : null;
     const paused = slots === 0;
     const statusEl = paused
       ? <StatusDot status="paused" />
@@ -561,14 +571,17 @@ export function WorkersTab({ workers, targets, queue, serverClientVersion, minIm
                     <DropdownMenuItem onClick={() => setDiskQuotaEditClientId(c.client_id)}>
                       Set disk quota…
                     </DropdownMenuItem>
-                    {!c.online && !isLocal && (
+                    {/* Disabled menu items swallow pointer events, so the
+                        tooltip lives on a wrapper the cursor can still hit. */}
+                    <div title={deleteBlockedReason ?? undefined}>
                       <DropdownMenuItem
+                        disabled={deleteBlockedReason !== null}
                         onClick={() => onRemove(c.client_id)}
                         className="text-[var(--danger,#ef4444)]"
                       >
-                        Remove
+                        Delete
                       </DropdownMenuItem>
-                    )}
+                    </div>
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
               </DropdownMenu>

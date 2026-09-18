@@ -31,7 +31,7 @@ An `aiohttp` async app. It's the only thing users interact with directly; everyt
 - `ui_api.py` — the **browser API** at `/ui/api/*`. Every surface in the web UI (devices, queue, history, settings, versioning) reads from here. Authenticated via Home Assistant Ingress trust — if the request arrived through the Ingress tunnel, it's already HA-authenticated.
 - `job_queue.py` — in-memory job queue persisted to `/data/queue.json`. Drives the `PENDING → WORKING → SUCCESS | FAILED | TIMED_OUT` state machine, retries, coalescing, and cancellation.
 - `scanner.py` — discovers `.yaml` targets in `/config/esphome/`, bundles the config directory for a worker, and lazy-installs the ESPHome version the add-on reports.
-- `registry.py` — tracks connected workers (live heartbeats, active job count, image version, requested slot count). Pure in-memory; no persistence.
+- `registry.py` — tracks build workers (live heartbeats, active job count, image version, requested slot count). Persisted to `/data/workers.json`; entries survive restarts and clean worker shutdowns, and are only removed by an explicit Delete from the Workers tab.
 - `device_poller.py` — discovers ESPHome devices via mDNS and polls them over `aioesphomeapi` for their running firmware version.
 - `git_versioning.py` — the config-versioning engine that landed in 1.6: debounced auto-commit on every user-initiated write, `git mv` on archive/restore, path-traversal-safe wrappers around every write.
 - `job_history.py` — persistent SQLite-backed compile history (JH.* in WORKITEMS-1.6). Survives queue coalescing and Clear.

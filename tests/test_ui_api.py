@@ -2367,3 +2367,31 @@ async def test_ping_returns_500_when_icmplib_raises(tmp_path, monkeypatch, _enab
         assert body["address"] == "192.168.1.42"
     finally:
         await ta.close()
+
+
+# ---------------------------------------------------------------------------
+# Worker delete — the only way a worker leaves the list
+# ---------------------------------------------------------------------------
+
+async def test_delete_stopped_worker_removes_it(tmp_path):
+    ta = await _make_ui_app(tmp_path)
+    try:
+        client_id = ta.registry.register("w", "linux/amd64", image_version="4")
+        ta.registry.mark_stopped(client_id)
+        resp = await ta.delete(f"/ui/api/workers/{client_id}")
+        assert resp.status == 200
+        assert ta.registry.get(client_id) is None
+    finally:
+        await ta.close()
+
+
+async def test_delete_online_worker_is_refused_with_hint(tmp_path):
+    ta = await _make_ui_app(tmp_path)
+    try:
+        client_id = ta.registry.register("w", "linux/amd64", image_version="4")
+        resp = await ta.delete(f"/ui/api/workers/{client_id}")
+        assert resp.status == 409
+        assert "stop it first" in (await resp.json())["error"].lower()
+        assert ta.registry.get(client_id) is not None
+    finally:
+        await ta.close()

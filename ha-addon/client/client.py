@@ -46,7 +46,7 @@ from sysinfo import collect_system_info
 # can detect the mismatch and self-update.
 # ---------------------------------------------------------------------------
 
-CLIENT_VERSION = "1.8.0-dev.7"
+CLIENT_VERSION = "1.8.0-dev.8"
 
 
 def _read_image_version() -> Optional[str]:
@@ -447,17 +447,13 @@ def _save_client_id(client_id: str) -> None:
         logger.debug("Could not persist client_id: %s", exc)
 
 
-def _clear_client_id() -> None:
-    """Remove persisted client_id (on clean deregister)."""
-    try:
-        if os.path.exists(_CLIENT_ID_FILE):
-            os.remove(_CLIENT_ID_FILE)
-    except OSError:
-        logger.debug("Could not remove client_id file: %s", _CLIENT_ID_FILE, exc_info=True)
-
-
 def deregister(client_id: str) -> None:
-    """Tell the server to remove this worker (best-effort on shutdown)."""
+    """Tell the server we're stopping (best-effort on shutdown).
+
+    The server keeps the worker's row and just marks it offline; the
+    persisted client_id is kept too, so the next start re-attaches to the
+    same row instead of leaving a stale duplicate in the Workers list.
+    """
     try:
         resp = post(
             "/api/v1/workers/deregister",
@@ -465,7 +461,6 @@ def deregister(client_id: str) -> None:
         )
         if resp.ok:
             logger.info("Deregistered worker %s", client_id)
-            _clear_client_id()
         else:
             logger.debug("Deregister returned %s", resp.status_code)
     except Exception as exc:
