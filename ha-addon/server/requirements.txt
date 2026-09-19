@@ -40,4 +40,4 @@ idna>=3.19
 # exploitable here. Bumped rather than PY-7-ignored because 50.0.0 resolves
 # cleanly against our pins — an ignore would have to be re-justified on
 # every future audit run, and a real fix does not.
-cryptography>=50
+cryptography>=50.0.1
