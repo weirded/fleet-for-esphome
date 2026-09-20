@@ -268,6 +268,25 @@ def esphome_writes_firmware(tmp_path) -> str:
     return str(p)
 
 
+@pytest.fixture()
+def esphome_writes_firmware_espidf(tmp_path) -> str:
+    """Fake esphome: same as esphome_writes_firmware, but writes to the native
+    ESP-IDF build layout — ESPHome 2026.7 dropped PlatformIO's
+    .pioenvs/<device>/ staging dir for ESP32; binaries land directly under
+    .esphome/build/<device>/build/."""
+    p = tmp_path / "esphome"
+    p.write_text(
+        '#!/bin/sh\n'
+        'echo "INFO Successfully compiled program."\n'
+        'mkdir -p ".esphome/build/testdevice/build"\n'
+        'echo "FAKE_OTA_BIN" > ".esphome/build/testdevice/build/firmware.bin"\n'
+        'echo "FAKE_FACTORY_BIN" > ".esphome/build/testdevice/build/firmware.factory.bin"\n'
+        'exit 0\n'
+    )
+    p.chmod(0o755)
+    return str(p)
+
+
 # ---------------------------------------------------------------------------
 # Fixture: redirect _ESPHOME_VERSIONS_DIR to a temp dir so the stable
 # build-dir strategy (#13) doesn't write to /esphome-versions/ on the host.
@@ -526,6 +545,31 @@ class TestFirmwareUploadOrdering:
         )
         assert result_events[0][1] == "success"
 
+    def test_download_only_succeeds_on_espidf_native_layout(
+        self, fake_server, esphome_writes_firmware_espidf
+    ):
+        """Download-only job must succeed when ESPHome's native ESP-IDF
+        toolchain (2026.7+) writes binaries straight to
+        .esphome/build/<device>/build/ with no .pioenvs/<device>/ staging
+        dir."""
+        target = "sensor.yaml"
+        job = {**_make_job("job-espidf-download", target, _simple_bundle(target)), "download_only": True}
+
+        with _patched(fake_server):
+            client_mod.run_job(
+                fake_server.client_id, job,
+                FakeVersionManager(esphome_writes_firmware_espidf),
+            )
+
+        firmware_events = [e for e in fake_server._call_sequence if e[0] == "firmware"]
+        result_events = [e for e in fake_server._call_sequence if e[0] == "result"]
+
+        assert firmware_events, "no firmware uploaded for ESP-IDF-native layout"
+        uploaded_variants = {e[1] for e in firmware_events}
+        assert "ota" in uploaded_variants
+        assert "factory" in uploaded_variants
+        assert result_events[0][1] == "success"
+
 
 # ---------------------------------------------------------------------------
 # Integration tests — real ESPHome compile via VersionManager
@@ -539,7 +583,7 @@ class TestFirmwareUploadOrdering:
 # ---------------------------------------------------------------------------
 
 # Override with ESPHOME_TEST_VERSION env var if you want a different version.
-ESPHOME_TEST_VERSION = os.environ.get("ESPHOME_TEST_VERSION", "2026.4.5")
+ESPHOME_TEST_VERSION = os.environ.get("ESPHOME_TEST_VERSION", "2026.7.3")
 
 _COMPILE_TEST_YAML = """\
 esphome:

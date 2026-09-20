@@ -173,6 +173,15 @@ def ensure_esphome_installed(
     # version from what we previously reported (e.g. after a refresh).
     _esphome_version_cache = None
     _esphome_ready.set()
+    # #119 (round 2): publish this venv so the in-container local worker
+    # (which shares ``versions_base``) never evicts it out from under
+    # ``create_bundle``. Best-effort; create_bundle self-heals if it
+    # vanishes anyway.
+    try:
+        from version_manager import write_server_active_version  # noqa: PLC0415
+        write_server_active_version(versions_base, version)
+    except Exception:
+        logger.debug("write_server_active_version(%s) failed", version, exc_info=True)
     logger.info("ESPHome %s ready at %s", version, bin_path)
 
 
@@ -561,11 +570,30 @@ def create_bundle(config_dir: str, target: str) -> bytes:
     if not _supports_modern_bundle():
         return _create_legacy_bundle(config_dir, target)
 
+    # #119 (round 2) self-heal: the in-container local worker shares the
+    # venv dir, and an eviction race can delete the server's bundling
+    # venv between installs. If the interpreter is gone, transparently
+    # reinstall the selected version instead of failing every compile
+    # with ``FileNotFoundError: '.../bin/python'`` until the add-on
+    # restarts. ``_venv_python`` returns ``sys.executable`` (always
+    # present) on the dev/legacy path, so this only fires on a genuinely
+    # evicted managed venv.
+    venv_python = _venv_python()
+    if not Path(venv_python).exists():
+        recover_version = get_esphome_version()
+        logger.warning(
+            "Bundle venv python missing (%s) — reinstalling ESPHome %s "
+            "(local worker likely evicted the shared venv; #119)",
+            venv_python, recover_version,
+        )
+        ensure_esphome_installed(recover_version)
+        venv_python = _venv_python()
+
     # PY-2: log the command line before the subprocess runs so a failure
     # triage has the actual invocation visible in the add-on log (the
     # `-c <inline-script>` shape means argv in any crash message shows
     # up as `-c`, not a readable path — the readable info is this line).
-    cmd = [_venv_python(), "-c", _BUNDLE_SUBPROCESS_SCRIPT, str(path)]
+    cmd = [venv_python, "-c", _BUNDLE_SUBPROCESS_SCRIPT, str(path)]
     logger.debug("Running bundle subprocess: %s %s -c <script> %s",
                  cmd[0], cmd[1], cmd[3])
     proc = subprocess.run(

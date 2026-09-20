@@ -103,11 +103,21 @@ def test_ensure_esphome_installed_happy_path(tmp_path: Path) -> None:
             assert version == "2026.4.0"
             return bin_path
 
+    # Real sentinel writer so we can assert the server publishes its
+    # active venv for the shared-dir local worker (#119 round 2).
+    from version_manager import (
+        SERVER_ACTIVE_VERSION_FILE,
+        write_server_active_version,
+    )
+
     original_sys_path = list(sys.path)
     try:
         with patch.object(scanner, "_activate_esphome_venv", wraps=scanner._activate_esphome_venv) as activate:
             with patch.dict(sys.modules, {"version_manager": type(sys)("version_manager")}):
                 sys.modules["version_manager"].VersionManager = _FakeVM
+                sys.modules["version_manager"].write_server_active_version = (
+                    write_server_active_version
+                )
                 scanner.ensure_esphome_installed("2026.4.0", versions_base=tmp_path)
 
         assert scanner._esphome_ready.is_set()
@@ -115,6 +125,10 @@ def test_ensure_esphome_installed_happy_path(tmp_path: Path) -> None:
         assert scanner._server_esphome_bin == bin_path
         assert scanner._server_esphome_venv == venv
         activate.assert_called_once_with(venv)
+        # #119 (round 2): the active version is published so the local
+        # worker's eviction won't delete the server's bundling venv.
+        sentinel = tmp_path / SERVER_ACTIVE_VERSION_FILE
+        assert sentinel.read_text().strip() == "2026.4.0"
     finally:
         sys.path[:] = original_sys_path
 

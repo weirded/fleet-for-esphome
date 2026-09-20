@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
@@ -115,6 +116,64 @@ def test_eviction_respects_lru_order(tmp_path):
             vm.ensure_version("v4")
 
     assert evicted[0] == "v2", f"Expected v2 to be evicted, got {evicted}"
+
+
+def test_eviction_preserves_server_active_version(tmp_path):
+    """#119 (round 2): the shared-dir local worker must never evict the
+    venv the server published as its active bundling venv.
+
+    Regression: without the sentinel pin, installing a new version with
+    MAX_ESPHOME_VERSIONS=1 evicted the server's selected venv, leaving
+    scanner._server_esphome_bin dangling and every bundle failing with
+    FileNotFoundError until the add-on restarted.
+    """
+    import os
+
+    from version_manager import write_server_active_version
+
+    # Server-active venv (oldest mtime → first eviction candidate).
+    _add_fake_version(tmp_path, "2025.11.0")
+    _add_fake_version(tmp_path, "2026.1.0")
+    # Force a deterministic LRU order: server-active is least-recent.
+    os.utime(tmp_path / "2025.11.0", (1.0, 1.0))
+    os.utime(tmp_path / "2026.1.0", (2.0, 2.0))
+
+    write_server_active_version(tmp_path, "2025.11.0")
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=1)
+    with patch.object(vm, "_install", side_effect=lambda v: _add_fake_version(tmp_path, v)):
+        vm.ensure_version("2026.5.1")
+
+    remaining = vm.installed_versions()
+    assert "2025.11.0" in remaining, "server-active venv must survive eviction"
+    assert "2026.5.1" in remaining, "newly-installed version present"
+    assert "2026.1.0" not in remaining, "unprotected old venv evicted"
+
+
+def test_eviction_no_infinite_loop_when_only_protected_remain(tmp_path):
+    """When every evictable venv is server-pinned, the install eviction
+    loop must terminate (and exceed max_versions) rather than spin."""
+    from version_manager import write_server_active_version
+
+    _add_fake_version(tmp_path, "2025.11.0")
+    write_server_active_version(tmp_path, "2025.11.0")
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=1)
+    with patch.object(vm, "_install", side_effect=lambda v: _add_fake_version(tmp_path, v)):
+        # Must return (no hang) even though the only existing venv is pinned
+        # and we're already at max_versions.
+        vm.ensure_version("2026.5.1")
+
+    remaining = vm.installed_versions()
+    assert "2025.11.0" in remaining
+    assert "2026.5.1" in remaining
+
+
+def test_read_server_active_versions_absent_is_empty(tmp_path):
+    """Remote workers (own dir, no sentinel) see no pins."""
+    from version_manager import read_server_active_versions
+
+    assert read_server_active_versions(tmp_path) == set()
 
 
 def test_no_eviction_under_limit(tmp_path):
@@ -1005,3 +1064,65 @@ def test_default_constructed_version_manager_collapses_to_one(tmp_path):
         with vm_one._lock:
             vm_one._evict_lru(keep_version=None)
     assert len(vm_one.installed_versions()) == 1
+
+
+# ---------------------------------------------------------------------------
+# _collect_firmware_variants: PlatformIO vs native ESP-IDF build layouts
+#
+# PY-5 note for the `# noqa: PLC0415` local imports below: `client` is imported
+# inside each test rather than at module scope on purpose. Importing it binds
+# SERVER_URL / SERVER_TOKEN (read at client.py module scope) and pulls the
+# worker's module-level state in at collection time. Keeping the import
+# function-local scopes that to the tests that actually need it.
+# ---------------------------------------------------------------------------
+
+def test_collect_firmware_variants_pioenvs_layout(tmp_path):
+    """Legacy PlatformIO layout: .esphome/build/<device>/.pioenvs/<device>/."""
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    device_dir = tmp_path / ".esphome" / "build" / "testdevice" / ".pioenvs" / "testdevice"
+    device_dir.mkdir(parents=True)
+    (device_dir / "firmware.factory.bin").write_bytes(b"factory")
+    (device_dir / "firmware.bin").write_bytes(b"ota")
+
+    variants = client_mod._collect_firmware_variants(str(tmp_path), "testdevice")
+
+    assert variants.keys() == {"factory", "ota"}
+    assert variants["factory"].read_bytes() == b"factory"
+    assert variants["ota"].read_bytes() == b"ota"
+
+
+def test_collect_firmware_variants_espidf_native_layout(tmp_path):
+    """Native ESP-IDF layout (ESPHome 2026.7+): no .pioenvs/ staging dir —
+    binaries land directly under .esphome/build/<device>/build/."""
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    device_dir = tmp_path / ".esphome" / "build" / "testdevice" / "build"
+    device_dir.mkdir(parents=True)
+    (device_dir / "firmware.factory.bin").write_bytes(b"factory")
+    (device_dir / "firmware.bin").write_bytes(b"ota")
+
+    variants = client_mod._collect_firmware_variants(str(tmp_path), "testdevice")
+
+    assert variants.keys() == {"factory", "ota"}
+    assert variants["factory"].read_bytes() == b"factory"
+    assert variants["ota"].read_bytes() == b"ota"
+
+
+def test_collect_firmware_variants_missing_returns_empty(tmp_path, caplog):
+    """Neither layout present: returns {} and logs a warning, doesn't raise."""
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    (tmp_path / ".esphome" / "build" / "testdevice").mkdir(parents=True)
+
+    with caplog.at_level(logging.WARNING, logger=client_mod.logger.name):
+        variants = client_mod._collect_firmware_variants(str(tmp_path), "testdevice")
+
+    assert variants == {}
+    # The warning is the only signal a user gets when a compile succeeds but
+    # archiving finds nothing (#244), so treat it as part of the contract: it
+    # has to name both layouts, or the message points at the wrong directory
+    # again — which is the bug #244 fixed.
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("No firmware binary found" in m for m in warnings), warnings
+    assert any(".pioenvs" in m and "build/" in m for m in warnings), warnings

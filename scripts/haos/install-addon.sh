@@ -74,7 +74,10 @@ fi
 
 FULL_SLUG="local_${ADDON_SLUG}"
 GUEST_TAR="/tmp/${ADDON_SLUG}.tar"
-GUEST_TARGET="/mnt/data/supervisor/addons/local/${ADDON_SLUG}"
+# Resolved lazily in step 3 — the probe needs guest_exec(), which is
+# defined further down. See the detection block there for why this
+# can't be a hardcoded path.
+GUEST_TARGET=""
 
 [[ -d "$ADDON_DIR" ]] || { echo "Add-on source dir $ADDON_DIR not found (REPO_ROOT=$REPO_ROOT)" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "python3 required locally (for parsing pvesh JSON)" >&2; exit 2; }
@@ -224,6 +227,40 @@ done
 REMOTE
 
 # --- 3. Reassemble + extract on the guest, honor INSTALL_MODE --------------
+
+# Supervisor's local add-on directory moved between HA OS releases:
+# `addons/local` → `apps/local`, mirroring the CLI rename this script
+# already follows (`ha apps info` / `ha apps update` above). Writing to
+# the wrong one is silent and total: the tar lands, the extract succeeds,
+# every log line reads healthy — and Supervisor never sees it, because it
+# scans the other directory. The add-on stays pinned at whatever version
+# was last written to the live path, so the version-wait later times out
+# with a message about the *image* being stale, pointing the reader at
+# GHCR instead of at the deploy that never arrived. This burned the
+# 1.8.0-dev.3 haos-pve run (writes to addons/local at 1.8.0-dev.3, live
+# tree in apps/local still 1.7.2-dev.8 from June 1) and is the infra half
+# of #243. push-to-hass-4.sh carries the same probe for the same reason.
+#
+# The base that ALREADY holds the add-on IS the one Supervisor reads —
+# that beats guessing by HA OS version. Only on a fresh install do we
+# fall back to the first existing base, newest layout first.
+log "Locating Supervisor's local add-on dir on the guest"
+GUEST_LOCAL_BASE=$(guest_exec '
+bases="/mnt/data/supervisor/apps/local /mnt/data/supervisor/addons/local /usr/share/hassio/apps/local /usr/share/hassio/addons/local"
+for b in $bases; do
+  [ -d "$b/'"${ADDON_SLUG}"'" ] && { echo "$b"; exit 0; }
+done
+for b in $bases; do
+  [ -d "$b" ] && { echo "$b"; exit 0; }
+done
+' | tr -d '\r' | head -1)
+if [[ -z "$GUEST_LOCAL_BASE" ]]; then
+  echo "ERROR: could not locate Supervisor's local add-on dir on VM $VMID." >&2
+  echo "       Add the current path to the probe list in scripts/haos/install-addon.sh." >&2
+  exit 1
+fi
+GUEST_TARGET="${GUEST_LOCAL_BASE}/${ADDON_SLUG}"
+log "Supervisor local add-on dir: $GUEST_LOCAL_BASE"
 
 log "Extracting into $GUEST_TARGET (mode=$INSTALL_MODE)"
 # The local-build mode strips the `image:` key so Supervisor takes the

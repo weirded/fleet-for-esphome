@@ -20,7 +20,7 @@
 #
 # Requires Docker on the host (HAOS: SSH & Web Terminal add-on with
 # Protection Mode OFF; Supervised: the host shell). No extra packages to
-# install — the sidecar pulls python:3.11-slim and `pip install py-spy`
+# install — the sidecar pulls python:3.13-slim and `pip install py-spy`
 # on the fly (~15s first time, cached after). The add-on image itself
 # no longer ships py-spy (removed in #189 when the UI path landed).
 #
@@ -64,7 +64,7 @@ docker run --rm \
   --cap-add SYS_PTRACE \
   --security-opt apparmor=unconfined \
   -e TARGET="$TARGET" \
-  python:3.11-slim \
+  python:3.13-slim \
   bash -c '
 set -eu
 PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1 \
