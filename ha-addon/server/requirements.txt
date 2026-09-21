@@ -29,7 +29,7 @@ icmplib>=3.0.4
 # deadlocked-interpreter edge case, so that path is unaffected.
 
 # Transitive of requests/aiohttp; floor bumped to clear PYSEC-2026-215 (fix in 3.15).
-idna>=3.19
+idna>=3.20
 
 # Transitive of aioesphomeapi / noiseprotocol / chacha20poly1305-reuseable
 # (the Noise-encrypted ESPHome API path). Floor bumped to clear
