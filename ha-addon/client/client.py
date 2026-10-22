@@ -46,7 +46,7 @@ from sysinfo import collect_system_info
 # can detect the mismatch and self-update.
 # ---------------------------------------------------------------------------
 
-CLIENT_VERSION = "1.8.0-dev.9"
+CLIENT_VERSION = "1.8.0-dev.10"
 
 
 def _read_image_version() -> Optional[str]:
@@ -787,9 +787,73 @@ def _idf_warm_marker(esphome_version: str) -> str:
     return os.path.join(_idf_cache_root(), f".fleet-warm-{esphome_version}")
 
 
-def _idf_is_warm(esphome_version: str) -> bool:
-    """True when some earlier compile already populated the IDF cache for
-    this ESPHome version, so a cold-install race is no longer possible."""
+# #249: memo of esphome binary path → the ESP-IDF version that ESPHome
+# release installs by default (``None`` when it couldn't be determined).
+_REQUIRED_IDF_VERSIONS: dict[str, str | None] = {}
+
+_IDF_VERSION_QUERY = (
+    "from esphome.components.esp32 import ESP_IDF_FRAMEWORK_VERSION_LOOKUP as L; "
+    "print(L['recommended'])"
+)
+
+
+def _required_idf_version(esphome_bin: str) -> str | None:
+    """#249: the ESP-IDF version *esphome_bin*'s release installs by default.
+
+    Asked of the ESPHome venv itself (its own interpreter sits next to
+    ``bin/esphome``) rather than parsed from source, so it tracks however
+    ESPHome lays the lookup out. Memoised per binary — ~2s the first time.
+    Both default framework paths resolve to it: ESP32 Arduino builds as an
+    IDF component on the same recommended IDF.
+
+    Returns ``None`` when the query fails (custom ``ESPHOME_BIN``, a layout
+    change upstream); callers fall back to the per-version warm marker.
+    """
+    if esphome_bin in _REQUIRED_IDF_VERSIONS:
+        return _REQUIRED_IDF_VERSIONS[esphome_bin]
+    python = os.path.join(os.path.dirname(esphome_bin), "python")
+    cmd = [python, "-c", _IDF_VERSION_QUERY]
+    logger.info("[#249] querying required ESP-IDF version: %s", cmd)
+    version: str | None = None
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+        out = proc.stdout.strip()
+        if proc.returncode == 0 and re.fullmatch(r"\d+\.\d+\.\d+", out):
+            version = out
+        else:
+            logger.info(
+                "[#249] could not determine required ESP-IDF version (rc=%s, out=%r, err=%r)",
+                proc.returncode, out[-200:], proc.stderr.strip()[-200:],
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("[#249] required ESP-IDF version query failed: %s", exc)
+    _REQUIRED_IDF_VERSIONS[esphome_bin] = version
+    return version
+
+
+def _idf_version_installed(idf_version: str) -> bool:
+    """#249: True when *idf_version*'s framework (with ``tools/``) and its
+    Python env are both present in the IDF cache."""
+    root = _idf_cache_root()
+    return os.path.isdir(os.path.join(root, "frameworks", idf_version, "tools")) and os.path.isdir(
+        os.path.join(root, "penvs", idf_version)
+    )
+
+
+def _idf_is_warm(esphome_version: str, esphome_bin: str | None = None) -> bool:
+    """True when the IDF cache already holds what this ESPHome version
+    needs, so a cold-install race is no longer possible.
+
+    #249: when the required IDF version is known, check for *that*
+    framework. The per-ESPHome-version marker alone is not enough: an
+    ESP8266 build (which never touches IDF) or a leftover framework from
+    the previous release satisfied it, so ESPHome 2026.10.0's first ESP32
+    builds took shared locks and raced the new IDF 5.5.6 download.
+    """
+    if esphome_bin:
+        idf_version = _required_idf_version(esphome_bin)
+        if idf_version:
+            return _idf_version_installed(idf_version)
     return os.path.isfile(_idf_warm_marker(esphome_version))
 
 
@@ -2024,7 +2088,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
             compile_cmd = [esphome_bin, "compile", target_path]
             _log_invocation(job_id, compile_cmd)
             # #242: same IDF install serialisation as the OTA path below.
-            idf_cold = not _idf_is_warm(esphome_version)
+            idf_cold = not _idf_is_warm(esphome_version, esphome_bin)
             if idf_cold:
                 _flush_log_text(
                     job_id,
@@ -2041,7 +2105,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                     env=subprocess_env,
                     job_id=job_id,
                 )
-                if not _is_broken_idf_state(compile_log):
+                if compile_ok and not _is_broken_idf_state(compile_log):
                     _mark_idf_warm(esphome_version)
             # #242 self-heal — see the run_cmd block below for context.
             if not compile_ok and _is_broken_idf_state(compile_log):
@@ -2060,7 +2124,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                             env=subprocess_env,
                             job_id=job_id,
                         )
-                        if not _is_broken_idf_state(compile_log):
+                        if compile_ok and not _is_broken_idf_state(compile_log):
                             _mark_idf_warm(esphome_version)
             # #214: same self-heal as the OTA path — see the comment on
             # the run_cmd retry block below for context.
@@ -2138,7 +2202,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
         # exclusive, so this slot performs the install alone; warm =>
         # shared, so slots run parallel but still wait behind any cold
         # install in flight.
-        idf_cold = not _idf_is_warm(esphome_version)
+        idf_cold = not _idf_is_warm(esphome_version, esphome_bin)
         if idf_cold:
             _flush_log_text(
                 job_id,
@@ -2155,7 +2219,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                 env=subprocess_env,
                 job_id=job_id,
             )
-            if not _is_broken_idf_state(run_log):
+            if run_ok and not _is_broken_idf_state(run_log):
                 _mark_idf_warm(esphome_version)
 
         # #242 self-heal: a poisoned cache predating this fix (or a race
@@ -2181,7 +2245,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                         env=subprocess_env,
                         job_id=job_id,
                     )
-                    if not _is_broken_idf_state(run_log):
+                    if run_ok and not _is_broken_idf_state(run_log):
                         _mark_idf_warm(esphome_version)
 
         # #214 / #220: when the compile failed with any of the broken-
