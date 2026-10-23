@@ -441,7 +441,13 @@ config = load_yaml(target_path)
 if not isinstance(config, dict):
     sys.stderr.write(f"YAML root of {target_path.name} is not a mapping\n")
     sys.exit(2)
-result = validate_config(config, None, skip_external_update=True)
+# #250: let ESPHome honour each remote source's own `refresh:` (default 1d;
+# `refresh: never` stays never), exactly as `esphome compile` does. With
+# skip_external_update=True the first clone of a `packages:` /
+# `external_components:` repo was frozen forever, so upstream fixes never
+# reached dispatch (KaufHA's ESPHome 2026.10 fix). Safe from the #111 git
+# race: create_bundle_async serialises every bundle behind _BUNDLE_LOCK.
+result = validate_config(config, None, skip_external_update=False)
 if result.errors:
     first = result.errors[0]
     msg = getattr(first, "msg", None) or str(first)
@@ -449,7 +455,7 @@ if result.errors:
         f"validation errors ({len(result.errors)} total): {msg}\n"
     )
     sys.exit(3)
-bundle = ConfigBundleCreator(result).create_bundle()
+bundle =ConfigBundleCreator(result).create_bundle()
 sys.stdout.buffer.write(bundle.data)
 """
 

@@ -1750,6 +1750,39 @@ def test_bundle_subprocess_stderr_does_not_leak_esphome_logger_chatter():
     )
 
 
+def test_bundle_subprocess_refreshes_remote_sources():
+    """#250: the dispatch bundle must let ESPHome refresh remote
+    ``packages:`` / ``external_components:`` per their ``refresh:``.
+
+    With ``skip_external_update=True`` the first clone was frozen forever:
+    hass-4 kept validating KaufHA plugs against a Sep-2026 checkout pinned
+    to a pre-2026.10 component, failing every compile with
+    ``module 'esphome.codegen' has no attribute 'Controller'`` long after
+    upstream shipped the fix.
+    """
+    import subprocess as _sp
+
+    from scanner import _BUNDLE_SUBPROCESS_SCRIPT
+
+    spy = (
+        "import sys, esphome.config as _c\n"
+        "_orig = _c.validate_config\n"
+        "def _spy(*a, **k):\n"
+        "    sys.stderr.write('SKIP=%r\\n' % k.get('skip_external_update', False))\n"
+        "    return _orig(*a, **k)\n"
+        "_c.validate_config = _spy\n"
+    )
+    proc = _sp.run(
+        [sys.executable, "-c", spy + _BUNDLE_SUBPROCESS_SCRIPT, str(FIXTURES / "device1.yaml")],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    assert proc.returncode == 0, stderr
+    assert "SKIP=False" in stderr, stderr
+
+
 # ---------------------------------------------------------------------------
 # rename_device_in_yaml — PY-1 regression for ui_api.rename_target's prior
 # regex-driven rewrite. Each case asserts a previously-misfiring shape now
