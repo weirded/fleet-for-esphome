@@ -270,18 +270,29 @@ def _get_last_eviction_freed_bytes() -> int:
 _disk_usage_sample_lock: threading.Lock = threading.Lock()
 _disk_usage_sample_bytes: Optional[int] = None
 _disk_usage_sample_truncated: bool = False
+# Build-cache footprint (cache/ + slots/) from the same sample, reported as
+# ``cache_size_mb`` so the heartbeat doesn't walk those trees itself.
+_cache_size_sample_bytes: Optional[int] = None
 
 
-def _record_disk_usage_sample(total_bytes: int, truncated: bool) -> None:
-    global _disk_usage_sample_bytes, _disk_usage_sample_truncated
+def _record_disk_usage_sample(
+    total_bytes: int, truncated: bool, cache_bytes: Optional[int] = None,
+) -> None:
+    global _disk_usage_sample_bytes, _disk_usage_sample_truncated, _cache_size_sample_bytes
     with _disk_usage_sample_lock:
         _disk_usage_sample_bytes = total_bytes
         _disk_usage_sample_truncated = truncated
+        _cache_size_sample_bytes = cache_bytes
 
 
 def _get_disk_usage_sample() -> Optional[int]:
     with _disk_usage_sample_lock:
         return _disk_usage_sample_bytes
+
+
+def _get_cache_size_sample() -> Optional[int]:
+    with _disk_usage_sample_lock:
+        return _cache_size_sample_bytes
 
 
 def _build_system_info() -> "SystemInfo":  # noqa: F821
@@ -298,6 +309,9 @@ def _build_system_info() -> "SystemInfo":  # noqa: F821
     cached = _get_disk_usage_sample()
     if cached is not None:
         sysinfo_dict["disk_usage_bytes"] = cached
+    cache_bytes = _get_cache_size_sample()
+    if cache_bytes is not None:
+        sysinfo_dict["cache_size_mb"] = round(cache_bytes / (1024 * 1024))
     quota = _get_current_disk_quota_bytes()
     if quota is not None:
         sysinfo_dict["disk_quota_bytes"] = quota
@@ -330,7 +344,10 @@ def _disk_usage_sampler_loop(stop_event: threading.Event) -> None:
                     base, deadline_s=DISK_USAGE_SAMPLE_BUDGET_S,
                 )
                 elapsed = time.monotonic() - started
-                _record_disk_usage_sample(usage.total_bytes, usage.truncated)
+                _record_disk_usage_sample(
+                    usage.total_bytes, usage.truncated,
+                    cache_bytes=usage.cache_bytes + usage.slot_bytes,
+                )
                 if usage.truncated:
                     logger.warning(
                         "disk-usage sample truncated after %.1fs (budget %.1fs) — "

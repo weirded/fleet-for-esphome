@@ -160,3 +160,42 @@ def test_record_disk_usage_sample_round_trip() -> None:
     assert client_mod._get_disk_usage_sample() == 999
     with client_mod._disk_usage_sample_lock:
         assert client_mod._disk_usage_sample_truncated is True
+
+
+# ---------------------------------------------------------------------------
+# 3. cache_size_mb comes from the sample cache, not a per-heartbeat walk
+# ---------------------------------------------------------------------------
+
+
+def test_build_system_info_reports_cache_size_without_walking(tmp_path: Path) -> None:
+    """Heartbeat assembly reports ``cache_size_mb`` without walking cache/ or slots/.
+
+    Pre-fix, ``collect_system_info`` ``os.walk``ed both trees on every
+    heartbeat to compute ``cache_size_mb``.
+    """
+    import client as client_mod  # noqa: PLC0415
+
+    (tmp_path / "cache" / "kitchen").mkdir(parents=True)
+    (tmp_path / "cache" / "kitchen" / "firmware.bin").write_bytes(b"\x00" * 1000)
+    client_mod._record_disk_usage_sample(
+        total_bytes=5 * 1024 * 1024, truncated=False, cache_bytes=3 * 1024 * 1024,
+    )
+
+    with patch.object(client_mod, "_ESPHOME_VERSIONS_DIR", str(tmp_path)), \
+            patch("os.walk", side_effect=AssertionError(
+                "heartbeat assembly must not walk the build cache",
+            )):
+        info = client_mod._build_system_info()
+
+    assert info.cached_targets == 1
+    assert info.cache_size_mb == 3
+
+
+def test_build_system_info_omits_cache_size_when_cache_empty() -> None:
+    """Before the first sample, ``cache_size_mb`` is absent rather than walked for."""
+    import client as client_mod  # noqa: PLC0415
+
+    client_mod._record_disk_usage_sample(total_bytes=0, truncated=False)
+
+    info = client_mod._build_system_info()
+    assert info.cache_size_mb is None
