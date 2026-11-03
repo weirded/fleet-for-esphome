@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import logging
 import os
 import shutil
@@ -10,6 +12,7 @@ import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +449,46 @@ class VersionManager:
             f"Retry the compile or check the worker host's network."
         ) from last_exc
 
+    @contextlib.contextmanager
+    def _install_file_lock(self, version: str) -> Iterator[None]:
+        """Cross-process exclusive lock around installing *version* (#317).
+
+        ``self._installing`` only dedupes threads sharing one
+        VersionManager. The add-on runs several: the server builds a fresh
+        one per ``ensure_esphome_installed`` call (UI version change + HA
+        add-on version poller fired 8 s apart on an ESPHome bump), and the
+        in-container local worker has its own in another process — all
+        on the same ``versions_base``. Unserialised, the second install's
+        "remove stale venv" wiped the first one mid-pip (``certifi/cacert.pem``
+        missing, ``ensurepip`` failing) and the UI showed "install failed".
+
+        ``flock`` conflicts between separate ``open()`` calls even within
+        one process, so this covers both cases. Lock files persist (handles
+        only). Failure to lock degrades to the old unserialised behaviour.
+        """
+        lock_path = self._base / f".install-{version}.lock"
+        fp = None
+        try:
+            self._base.mkdir(parents=True, exist_ok=True)
+            fp = open(lock_path, "w", encoding="utf-8")
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            logger.warning(
+                "Could not acquire install lock %s (%s) — proceeding unserialised",
+                lock_path, exc,
+            )
+            if fp is not None:
+                fp.close()
+                fp = None
+        try:
+            yield
+        finally:
+            if fp is not None:
+                try:
+                    fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+                finally:
+                    fp.close()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -498,7 +541,16 @@ class VersionManager:
             # We own the install — run outside the lock (slow subprocess)
             assert install_event is not None
             try:
-                self._install(version)
+                with self._install_file_lock(version):
+                    # Another process (or VersionManager) may have finished
+                    # this install while we waited on the lock (#317).
+                    if self._is_installed(version):
+                        logger.info(
+                            "esphome==%s was installed concurrently by another "
+                            "process — reusing it", version,
+                        )
+                    else:
+                        self._install(version)
                 with self._lock:
                     self._lru[version] = self._venv_path(version)
                     self._installing.pop(version, None)
