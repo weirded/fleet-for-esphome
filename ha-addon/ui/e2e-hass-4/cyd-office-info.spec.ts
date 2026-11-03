@@ -110,6 +110,13 @@ test.describe.serial('cyd-office-info hass-4 smoke', () => {
     enqueuedJobId = await latestJobIdFor(request, TARGET_FILENAME);
     expect(enqueuedJobId).toBeTruthy();
 
+    // #137: a single-device Upgrade auto-opens the new job's build log.
+    // Close it — the modal covers the tab bar.
+    const logDialog = page.getByRole('dialog');
+    await expect(logDialog).toBeVisible({ timeout: 10_000 });
+    await page.keyboard.press('Escape');
+    await expect(logDialog).toHaveCount(0);
+
     // Switch to the Queue tab and confirm the row is visible in the UI
     await page.getByRole('button', { name: /^Queue/ }).click();
     const queueRow = await findQueueRow(page);
