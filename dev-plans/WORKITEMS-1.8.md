@@ -61,6 +61,14 @@ Largely as scoped before — adapted to ride on LL.* (LiteLLM, structured output
 
 ## Open Bugs
 
+- [x] **[#238](https://github.com/weirded/fleet-for-esphome/issues/238)** *(1.8.0-dev.13)* — *Helm charts had no way to add a sidecar/init container or extra volumes, so a git-sync sidecar feeding the config dir was impossible.* Both charts (`deploy/kubernetes/` worker, `deploy/kubernetes/server/`) gain top-level `initContainers`, `extraContainers`, `extraVolumes`, `extraVolumeMounts` (default `[]`, `toYaml | nindent`), schema entries, helm-unittest cases (defaults render nothing; all four render in place), and a git-sync example in the server README. Chart `version` 0.1.0 → 0.2.0. Default renders byte-identical apart from the chart label. Not exercised on a real cluster.
+
+- [x] **[#137](https://github.com/weirded/fleet-for-esphome/issues/137)** *(1.8.0-dev.13)* — *Upgrade only landed on the Queue tab; the user had to open the build log, then open Live Logs by hand after OTA.* Single-device Upgrade now opens the new job's log (matched by `run_id`; falls back to the target's in-flight job when the server deduped, `enqueued=0`). A watcher in `App.tsx` hands over to `DeviceLogModal` when a job whose log was open while in progress ends `success` + `ota_result=success` and isn't validate/download-only, and not while the editor is open. Pending jobs show a dim "Waiting for a worker…" line instead of a blank terminal. Bulk upgrades unchanged. e2e: `auto-open-logs.spec.ts`.
+
+- [x] **[#257](https://github.com/weirded/fleet-for-esphome/issues/257)** *(1.8.0-dev.13)* — *No way to be notified when a new ESPHome release ships.* Per-device `update` entities compare against the *selected* version, so a new PyPI release was invisible to HA until the user switched. `/ui/api/esphome-versions` (+ refresh) now returns additive `latest_stable` (raw PyPI list, `None` when PyPI never reached). Integration gains hub sensor *Latest ESPHome version* and binary_sensor *ESPHome update available* (`UPDATE` class, AwesomeVersion compare; beta-ahead-of-stable → off). DOCS example automation #4. Tests: `test_ui_api.py` + real-hass `test_integration_esphome_release.py`. Follow-up idea (not filed): hub-level `update` entity whose install switches the global version.
+
+- [x] **[#150](https://github.com/weirded/fleet-for-esphome/issues/150)** *(1.8.0-dev.13)* — *No way to change the accent colour.* Settings → Display → Accent colour: 8 presets (indigo default = unchanged render). `AppSettings.accent_color` validated against `ACCENT_COLORS`; `data-accent` on `<html>` drives per-preset `--accent`/`--accent-hover` in `theme.css` with separate light/dark shades for contrast; `main.tsx` pre-applies the localStorage-cached value to avoid a flash. Tests: `test_settings.py`, `accent-color.spec.ts`.
+
 - [x] **#317** *(1.8.0-dev.12)* — *"ESPHome 2026.10.2 install failed" after an ESPHome bump: concurrent installs of the same version clobbered each other's venv.* **Live repro** hass-4 2026-11-03: switching to 2026.10.2 in the UI started an install; 8 s later the HA ESPHome add-on poller saw the same bump and started a second one. `scanner.ensure_esphome_installed` builds a fresh `VersionManager` per call, so the per-instance `_installing` dedupe never saw the other — the second install's "remove stale venv" wiped the first mid-pip (`Could not find a suitable TLS CA certificate bundle … certifi/cacert.pem`), and the second's `python -m venv` then failed in `ensurepip`. The UI's Retry at 15:11:54 raced the in-container local worker (separate process, own manager, same `/data/esphome-versions`) installing 2026.10.2 for the just-enqueued compile run and failed the same way. **Fix:** `VersionManager.ensure_version` now holds a cross-process `flock` on `<versions_base>/.install-<version>.lock` around install and re-checks `_is_installed` after acquiring it, so later callers reuse the finished venv instead of wiping it. Covers server↔server and server↔local-worker. Regression test `tests/test_version_manager_install_lock.py` (fails without the lock: overlapping installs).
 - [x] **#250** *(1.8.0-dev.11)* — *Remote `packages:` / `external_components:` were frozen at their first clone, so upstream fixes never reached dispatch.* **Live repro** hass-4 2026-10-22: all 7 `kauf-plug-*` failed pre-dispatch validation on ESPHome 2026.10.0 with `module 'esphome.codegen' has no attribute 'Controller'`. KaufHA shipped the 2026.10 fix upstream (`kauf-plugs` now pins `KaufHA/common` `v2026.10.0`), but hass-4's `.esphome/packages/` clones of `kauf-plugs`/`PLF12` dated from 2026-09-21 and had never fetched (no `FETCH_HEAD`), so they kept resolving `common@v2026.9.22`. Cause: `_BUNDLE_SUBPROCESS_SCRIPT` called `validate_config(..., skip_external_update=True)`, which bypasses ESPHome's per-source `refresh:` (default 1d) entirely. **Fix:** the dispatch bundle now passes `skip_external_update=False`, matching `esphome compile`; `refresh: never` sources stay pinned. The frequent metadata path (`_full_validate_config`) keeps `True` — it reuses the clones the bundle path refreshes. No #111 git race: bundles are serialised by `_BUNDLE_LOCK`. Regression test `test_bundle_subprocess_refreshes_remote_sources`.
 
@@ -107,7 +115,7 @@ Largely as scoped before — adapted to ride on LL.* (LiteLLM, structured output
 
 ## Issue & PR triage
 
-State of the public tracker as of `1.8.0-dev.7`. **This section is the source of
+State of the public tracker as of `1.8.0-dev.13`. **This section is the source of
 truth** — update it first.
 
 A rendered mirror of it is published as an Artifact at
@@ -138,6 +146,10 @@ remembering.
 | [#204](https://github.com/weirded/fleet-for-esphome/issues/204) | dev.3 | Diff collapses unchanged runs and marks changes in the scrollbar |
 | [#193](https://github.com/weirded/fleet-for-esphome/issues/193) | dev.3 | `ESPHOME_INSTALL_TIMEOUT` raises the pip-install ceiling |
 | [#240](https://github.com/weirded/fleet-for-esphome/issues/240) | 1.7.2 + dev.3 | Root cause shipped in 1.7.2; dev.3 replaced the misleading message |
+| [#238](https://github.com/weirded/fleet-for-esphome/issues/238) | dev.13 | Helm charts accept sidecars, init containers, extra volumes |
+| [#137](https://github.com/weirded/fleet-for-esphome/issues/137) | dev.13 | Upgrade opens the build log, then live logs after OTA |
+| [#257](https://github.com/weirded/fleet-for-esphome/issues/257) | dev.13 | HA sensors for latest ESPHome + update available |
+| [#150](https://github.com/weirded/fleet-for-esphome/issues/150) | dev.13 | Accent colour presets in Settings → Display |
 
 ### Open pull requests
 

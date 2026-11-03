@@ -1640,7 +1640,22 @@ async def get_esphome_versions(request: web.Request) -> web.Response:
         "selected": selected,
         "detected": detected,
         "available": available,
+        "latest_stable": _latest_stable(request.app["_rt"].get("esphome_available_versions", [])),
     })
+
+
+def _latest_stable(versions: list[str]) -> str | None:
+    """#257: newest stable ESPHome release on PyPI, or None when unknown.
+
+    Computed from the raw PyPI list only (not the selected-version
+    fallback above) so a PyPI outage reports "unknown" instead of
+    pretending the selected version is the latest release. Consumed by
+    the HA integration's "Latest ESPHome version" sensor.
+    """
+    # Lazy import mirrors refresh_esphome_versions: main imports ui_api.
+    from main import _pick_latest_stable_version  # noqa: PLC0415
+
+    return _pick_latest_stable_version(versions)
 
 
 @routes.post("/ui/api/esphome-versions/refresh")
@@ -1673,6 +1688,7 @@ async def refresh_esphome_versions(request: web.Request) -> web.Response:
         "selected": selected,
         "detected": detected,
         "available": available,
+        "latest_stable": _latest_stable(available),
     })
 
 

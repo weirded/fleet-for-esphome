@@ -129,6 +129,8 @@ CONTRACTS: list[tuple[str, Any, Any, set[str]]] = [
             # 1.7.2 #145: font-size scale picker — same drawer field-state
             # contract; UI applies via data-font-size on <html>.
             "font_size",
+            # 1.8 #150: accent-colour preset; UI applies via data-accent.
+            "accent_color",
         },
     ),
     # Targets — Devices tab, integration's device builder, and every

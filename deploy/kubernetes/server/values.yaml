@@ -74,6 +74,21 @@ securityContext:
 # the correct readiness signal.
 probePath: /ui/api/server-info
 
+# Extra pod-level wiring for sidecar / init patterns (e.g. syncing
+# /config/esphome from a Git repo with kubernetes/git-sync — see README).
+# Each is rendered verbatim with toYaml, so use plain Kubernetes syntax.
+#
+# initContainers: run to completion before the server starts.
+initContainers: []
+# extraContainers: sidecars running alongside the server container.
+extraContainers: []
+# extraVolumes: additional pod volumes. Sidecars/init containers can mount
+# these and also the chart's own `config` (/config/esphome) and `data`
+# (/data) volumes by name.
+extraVolumes: []
+# extraVolumeMounts: additional mounts on the main server container.
+extraVolumeMounts: []
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

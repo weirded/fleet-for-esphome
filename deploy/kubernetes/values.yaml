@@ -57,6 +57,21 @@ resources:
   limits:
     memory: 2Gi
 
+# Extra pod-level wiring for sidecar / init patterns (mirrors the
+# esphome-fleet-server chart).
+# Each is rendered verbatim with toYaml, so use plain Kubernetes syntax.
+#
+# initContainers: run to completion before the worker starts.
+initContainers: []
+# extraContainers: sidecars running alongside the worker container.
+extraContainers: []
+# extraVolumes: additional pod volumes. Sidecars/init containers can mount
+# these and also the chart's own `versions` (/esphome-versions) volume by
+# name.
+extraVolumes: []
+# extraVolumeMounts: additional mounts on the main worker container.
+extraVolumeMounts: []
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

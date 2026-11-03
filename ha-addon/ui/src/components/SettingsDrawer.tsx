@@ -9,6 +9,8 @@ import {
   updateSettings,
   type AppSettings,
 } from '@/api/client';
+import { DEFAULT_ACCENT } from '@/lib/accent';
+import { AccentColorPicker } from '@/components/AccentColorPicker';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -266,6 +268,19 @@ export function SettingsDrawer({ open, onOpenChange, dirtyTargets = [], onReques
                     { value: 'large', label: 'Large' },
                   ]}
                   onCommit={v => patch({ font_size: v as 'small' | 'normal' | 'large' })}
+                />
+                {/* #150 — accent colour presets. Applied app-wide by
+                    App.tsx (data-accent on <html>) as soon as the PATCH
+                    lands in the shared 'settings' SWR cache. */}
+                <Row
+                  label="Accent colour"
+                  help="Colour for buttons, active tabs, links, and focus rings. Each preset is tuned for both light and dark mode."
+                  control={
+                    <AccentColorPicker
+                      value={data.accent_color ?? DEFAULT_ACCENT}
+                      onChange={v => { void patch({ accent_color: v }); }}
+                    />
+                  }
                 />
               </Section>
               </>}

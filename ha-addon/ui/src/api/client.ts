@@ -1,5 +1,6 @@
 import { toast } from 'sonner';
 import type { Device, EsphomeVersions, Job, ServerInfo, Target, Worker } from '../types';
+import type { AccentColor } from '../lib/accent';
 
 // ---------------------------------------------------------------------------
 // Response shapes (QS.9)
@@ -9,7 +10,7 @@ import type { Device, EsphomeVersions, Job, ServerInfo, Target, Worker } from '.
 // `parseResponse<T>()` instead of inline `as { ... }` casts.
 // ---------------------------------------------------------------------------
 
-export interface CompileResponse { enqueued: number }
+export interface CompileResponse { enqueued: number; run_id?: string }
 export interface CancelResponse { cancelled: number }
 export interface RetryResponse { retried: number }
 export interface RemoveResponse { removed: number }
@@ -304,6 +305,10 @@ export interface AppSettings {
   // Tailwind's whole type ramp scales proportionally; persisted via
   // [data-font-size] attribute on <html>, applied at App.tsx mount.
   font_size: 'small' | 'normal' | 'large';
+  // #150 — UI accent-colour preset. 'indigo' is the pre-#150 default.
+  // Ids mirror ACCENT_COLORS in src/lib/accent.ts and the server's
+  // settings.py; applied via [data-accent] on <html> by App.tsx.
+  accent_color: AccentColor;
 }
 
 export async function getSettings(): Promise<AppSettings> {

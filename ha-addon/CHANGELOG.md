@@ -8,6 +8,14 @@
 
 **Devices built from online packages pick up upstream fixes again.** If a device's YAML pulls packages or external components from GitHub (for example the Kauf plug configs), the add-on kept using the first copy it ever downloaded and never refreshed it. When a new ESPHome release needed an updated version of that package, those devices kept failing with an error from the old copy, even after the package author had published a fix. Packages are now refreshed on the same schedule ESPHome itself uses (daily by default, or never for sources you've pinned).
 
+**Watch an upgrade from start to finish without clicking around.** Upgrading a single device now opens its build log straight away (with a "waiting for a worker" note while it's queued), and once the new firmware is flashed successfully it switches to that device's live logs so you can watch it boot. Bulk upgrades still just take you to the Queue tab, and nothing pops up for failed builds or download-only compiles.
+
+**Get notified when a new ESPHome release comes out.** The Home Assistant integration adds two entities to the Fleet hub device: **Latest ESPHome version** and **ESPHome update available**, which turns on while a stable release newer than the one Fleet compiles with is out (betas are ignored). The docs include a ready-to-copy automation that sends you a notification when it flips.
+
+**Pick an accent colour.** Settings → Display has a new Accent colour row with eight presets. Indigo stays the default, and each colour is tuned to stay readable in both light and dark mode.
+
+**Kubernetes: sidecars, init containers and extra volumes.** Both Helm charts now accept `initContainers`, `extraContainers`, `extraVolumes` and `extraVolumeMounts`, so you can, for example, run git-sync to pull your ESPHome YAML straight from a Git repository. The server chart's README has a worked example.
+
 **Remote build workers must rebuild their Docker image** after this update. A dependency refresh in the worker image moved the minimum image version, so a worker still on the old image shows as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
 
 **Under the hood.** Fourteen dependency updates across the server, build worker, web UI, and CI workflows — including newer `pydantic`, `cryptography`, `zeroconf`, `react`, `react-dom`, `react-i18next`, and `eslint` — with the Python lockfiles regenerated to match.

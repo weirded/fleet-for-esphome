@@ -105,3 +105,55 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8765
+
+  - it: renders no extra containers, init containers or volumes by default
+    set:
+      server.token: tok
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 2
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 2
+
+  - it: renders initContainers, extraContainers, extraVolumes and extraVolumeMounts
+    set:
+      server.token: tok
+      initContainers:
+        - name: git-sync-init
+          image: registry.k8s.io/git-sync/git-sync:v4.4.0
+      extraContainers:
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.4.0
+      extraVolumes:
+        - name: esphome-git
+          emptyDir: {}
+      extraVolumeMounts:
+        - name: esphome-git
+          mountPath: /git
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: git-sync-init
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: server
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: git-sync
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: esphome-git
+            emptyDir: {}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: esphome-git
+            mountPath: /git

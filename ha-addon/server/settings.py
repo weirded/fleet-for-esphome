@@ -200,6 +200,15 @@ class AppSettings:
     # font-size variable.
     font_size: str = "normal"
 
+    # #150: UI accent colour preset. ``'indigo'`` is the pre-#150 accent
+    # (default — byte-identical render for existing installs). Presets
+    # only, no free-form colour: each preset carries hand-picked light +
+    # dark values in theme.css so text-on-accent stays readable in both
+    # themes. Applied by App.tsx via ``data-accent`` on <html>. Adding a
+    # preset means adding it to ``ACCENT_COLORS`` below, the CSS rules in
+    # ``ha-addon/ui/src/theme.css``, and ``ha-addon/ui/src/lib/accent.ts``.
+    accent_color: str = "indigo"
+
     # DQ.1: fleet-wide default per-worker disk quota for the
     # ``/esphome-versions/`` tree (venvs + per-target caches + per-slot
     # working dirs + pio-slot toolchains). Pushed to every worker on every
@@ -306,6 +315,12 @@ def _validate_token(value: Any, field: str) -> str:
     return stripped
 
 
+# #150: accent-colour presets. Order mirrors the swatch order in the UI.
+ACCENT_COLORS: tuple[str, ...] = (
+    "indigo", "blue", "teal", "green", "amber", "orange", "rose", "violet",
+)
+
+
 # Per-field validators. Any PATCH that names a key not listed here is
 # rejected — keeps typos from silently disappearing.
 _VALIDATORS: dict[str, Callable[[Any, str], Any]] = {
@@ -351,6 +366,8 @@ _VALIDATORS: dict[str, Callable[[Any, str], Any]] = {
     "language": _validate_enum("auto", "en", "de"),
     # #145: font-size scale — 'small' / 'normal' (default) / 'large'.
     "font_size": _validate_enum("small", "normal", "large"),
+    # #150: accent-colour preset — see ACCENT_COLORS.
+    "accent_color": _validate_enum(*ACCENT_COLORS),
     # DQ.1: ≥1 GiB floor stops a typo from starving every worker into
     # constant eviction; 1 TiB ceiling matches firmware_cache_max_gb's
     # upper bound (anything bigger is misconfiguration). Also pinned to

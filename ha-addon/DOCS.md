@@ -30,6 +30,8 @@ From 1.6.2, installing this add-on pulls a prebuilt image from GitHub Container 
 
 Everything is configured from the **Settings drawer** inside the web UI — click the gear icon in the top-right of the header. The Supervisor **Configuration** tab is intentionally empty; every option moved into the drawer so edits apply immediately without restarting the add-on. Settings are split into **Basic** (what you touch most — versioning, authentication, display) and **Advanced** (retention, cache, timeouts, polling) tabs. Each field carries inline help text describing what it does and the valid range, so there's no need to mirror the settings reference here.
 
+The **Display** section also lets you personalise the interface: time and date format, language, font size, and an **accent colour** — pick one of eight preset swatches (indigo is the default) to recolour buttons, active tabs, links, and focus rings. Each preset is tuned to stay readable in both light and dark mode, and the choice is saved with your other settings so it follows you to every browser.
+
 Settings persist across add-on updates. When upgrading from a pre-1.6 release, your existing Supervisor options (token, timeouts, thresholds, `require_ha_auth`) are one-shot imported on first boot so nothing you set before is lost.
 
 ## What's on the Web UI
@@ -262,7 +264,7 @@ the integration reports unavailable when it cannot reach it.
 
 ### Examples
 
-Three automations to copy and adapt. Replace the entity IDs with your own —
+Four automations to copy and adapt. Replace the entity IDs with your own —
 device entities are named after the device, so a device called `porch-sensor`
 gets `update.porch_sensor_firmware`.
 
@@ -328,6 +330,31 @@ automation:
 ```
 
 The `for: "00:02:00"` matters — see the heartbeat note under Known limitations.
+
+**4. Notify when a new ESPHome release comes out**
+
+The Fleet hub device has a **Latest ESPHome version** sensor (the newest
+stable ESPHome release, checked hourly) and an **ESPHome update available**
+binary sensor that turns on while that release is newer than the version Fleet
+compiles with. Beta releases are ignored.
+
+```yaml
+automation:
+  - alias: "New ESPHome release"
+    trigger:
+      - trigger: state
+        entity_id: binary_sensor.fleet_for_esphome_esphome_update_available
+        to: "on"
+    action:
+      - action: notify.persistent_notification
+        data:
+          title: "New ESPHome release"
+          message: >-
+            ESPHome
+            {{ states('sensor.fleet_for_esphome_latest_esphome_version') }}
+            is out. Switch to it from the ESPHome version dropdown in the Fleet header, then
+            upgrade your devices.
+```
 
 The other services are `esphome_fleet.cancel` (stop a queued or running job)
 and `esphome_fleet.validate` (check a config without building it). Blueprint

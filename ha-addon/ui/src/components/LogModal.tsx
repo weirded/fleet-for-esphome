@@ -76,6 +76,9 @@ export function LogModal({ source, queue, workers, onClose, onRetry, onEdit, onO
 
   const job = isJob && source ? queue.find(j => j.id === source.jobId) ?? null : null;
   const worker = isWorker && source ? workers.find(w => w.client_id === source.workerId) ?? null : null;
+  // #137: the log can be opened for a job the queue poll hasn't
+  // delivered yet; re-run the stream setup once it shows up.
+  const jobPresent = job !== null;
 
   // Derive a stable string identity for the source so the xterm/WS
   // effect below only re-runs when the *target* changes, not on every
@@ -193,10 +196,25 @@ export function LogModal({ source, queue, workers, onClose, onRetry, onEdit, onO
       const isLive = currentJob && ['working', 'pending'].includes(currentJob.state);
 
       if (isLive) {
+        // #137: a just-enqueued job (auto-opened after Upgrade) has no
+        // output yet — show a dim hint instead of a blank terminal. The
+        // WS stays subscribed and the first real frame replaces it.
+        let hintShown = false;
+        if (currentJob.state !== 'working' && termRef.current) {
+          termRef.current.write('\x1b[2mWaiting for a worker to pick up this job…\x1b[0m\r\n');
+          hintShown = true;
+        }
         // Prefer WebSocket, fall back to HTTP polling
         try {
           const ws = new WebSocket(buildWsUrl(`ui/api/jobs/${source.jobId}/log/ws`));
-          ws.onmessage = (e) => { if (termRef.current) termRef.current.write(e.data as string); };
+          ws.onmessage = (e) => {
+            if (!termRef.current) return;
+            if (hintShown) {
+              termRef.current.reset();
+              hintShown = false;
+            }
+            termRef.current.write(e.data as string);
+          };
           ws.onerror = () => {
             stopWs();
             startJobPolling(source.jobId);
@@ -251,7 +269,7 @@ export function LogModal({ source, queue, workers, onClose, onRetry, onEdit, onO
     // App.tsx re-creates the object every render so using it here
     // would tear down xterm 1 Hz.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey, containerMounted, startJobPolling]);
+  }, [sourceKey, containerMounted, startJobPolling, jobPresent]);
 
   // Compute header contents from current state
   let modalTitle = '';

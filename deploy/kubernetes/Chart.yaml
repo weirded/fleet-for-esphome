@@ -6,7 +6,7 @@ description: |
   awareness; bring your own cluster autoscaler / Wake-on-LAN / Karpenter if
   you want nodes to power down when idle.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.7.0"
 home: https://github.com/weirded/fleet-for-esphome
 sources:
