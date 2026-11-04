@@ -215,29 +215,18 @@ def collect_system_info(versions_dir: str = "/esphome-versions") -> dict:
     # 5.2: build cache stats. After #45 the layout is:
     #   cache/<stem>/   shared per-target cache (.pio/ + .esphome/)
     #   slots/<slot>/<stem>/  per-slot working dirs
-    # Count distinct targets via cache/ entries; sum sizes from BOTH dirs
-    # so the user sees the on-disk footprint they'd reclaim by cleaning.
+    # Count distinct targets via cache/ entries. ``cache_size_mb`` is not
+    # computed here: summing cache/ + slots/ walks tens of thousands of
+    # files, and this runs on every heartbeat. client.py fills it from the
+    # background disk-usage sampler instead.
     cached_targets = 0
-    cache_size_mb: Optional[int] = None
     try:
         cache_dir = os.path.join(versions_dir, "cache")
-        slots_dir = os.path.join(versions_dir, "slots")
         if os.path.isdir(cache_dir):
             cached_targets = sum(
                 1 for entry in os.listdir(cache_dir)
                 if os.path.isdir(os.path.join(cache_dir, entry))
             )
-        total_bytes = 0
-        for root_dir in (cache_dir, slots_dir):
-            if not os.path.isdir(root_dir):
-                continue
-            for dirpath, _dirnames, filenames in os.walk(root_dir):
-                for f in filenames:
-                    try:
-                        total_bytes += os.path.getsize(os.path.join(dirpath, f))
-                    except OSError:
-                        pass
-        cache_size_mb = round(total_bytes / (1024 * 1024))
     except Exception:
         pass
 
@@ -255,5 +244,4 @@ def collect_system_info(versions_dir: str = "/esphome-versions") -> dict:
         "disk_used_pct": disk_pct,
         "disk_free_bytes": disk_free_bytes,
         "cached_targets": cached_targets,
-        "cache_size_mb": cache_size_mb,
     }

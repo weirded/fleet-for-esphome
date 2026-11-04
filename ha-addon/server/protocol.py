@@ -101,6 +101,11 @@ class SystemInfo(_ProtocolMessage):
     disk_usage_bytes: Optional[int] = None
     disk_quota_bytes: Optional[int] = None
     last_eviction_freed_bytes: Optional[int] = None
+    # 5.2: build-cache stats for the Workers tab. ``cached_targets`` counts
+    # ``cache/<stem>/`` dirs; ``cache_size_mb`` is ``cache/`` + ``slots/``
+    # from the background disk-usage sampler, absent until its first run.
+    cached_targets: Optional[int] = None
+    cache_size_mb: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
