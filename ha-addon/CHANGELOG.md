@@ -18,7 +18,7 @@
 
 **Remote build workers must rebuild their Docker image** after this update. A dependency refresh in the worker image moved the minimum image version, so a worker still on the old image shows as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
 
-**Under the hood.** Fourteen dependency updates across the server, build worker, web UI, and CI workflows — including newer `pydantic`, `cryptography`, `zeroconf`, `react`, `react-dom`, `react-i18next`, and `eslint` — with the Python lockfiles regenerated to match.
+**Under the hood.** A broad dependency refresh across the server, build worker, web UI, and CI workflows — including security fixes in `aiohttp` and the web UI's HTML sanitiser, plus newer `pydantic`, `cryptography`, `zeroconf`, `react`, `react-dom`, `react-i18next`, and `eslint` — with the Python lockfiles regenerated to match.
 
 ## 1.7.3
 
