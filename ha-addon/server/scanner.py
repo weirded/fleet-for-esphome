@@ -434,6 +434,24 @@ from esphome.core import CORE
 from esphome.yaml_util import load_yaml
 from esphome.config import validate_config
 from esphome.bundle import ConfigBundleCreator
+import esphome.bundle as _bundle_mod
+
+# GitHub #154: ESPHome <2026.8 (no ``add_secret_scan_dir``) never scans
+# git-fetched package checkouts for ``!secret`` refs, so their keys are
+# dropped from the bundle's filtered secrets.yaml. Record each checkout
+# the packages loader clones and report it on stderr; the server backfills
+# the keys (scanner.merge_remote_package_secrets). 2026.8+ does this itself.
+if not hasattr(_bundle_mod, "add_secret_scan_dir"):
+    from esphome import git as _git
+    _orig_clone_or_update = _git.clone_or_update
+
+    def _recording_clone_or_update(*args, **kwargs):
+        result = _orig_clone_or_update(*args, **kwargs)
+        if kwargs.get("domain") == "packages":
+            sys.stderr.write(f"__REMOTE_PKG_DIR_MARKER__{result[0]}\n")
+        return result
+
+    _git.clone_or_update = _recording_clone_or_update
 
 target_path = Path(sys.argv[1]).resolve()
 CORE.config_path = target_path
@@ -458,6 +476,130 @@ if result.errors:
 bundle =ConfigBundleCreator(result).create_bundle()
 sys.stdout.buffer.write(bundle.data)
 """
+
+# GitHub #154: stderr line prefix the bundle subprocess uses to report a
+# git-package checkout dir (see the recording hook in the script above).
+REMOTE_PKG_DIR_MARKER = "FLEET_REMOTE_PKG_DIR:"
+_BUNDLE_SUBPROCESS_SCRIPT = _BUNDLE_SUBPROCESS_SCRIPT.replace(
+    "__REMOTE_PKG_DIR_MARKER__", REMOTE_PKG_DIR_MARKER,
+)
+
+# Same pattern ESPHome's bundler uses (esphome/bundle.py ``_SECRET_RE``):
+# optional quotes around the key, over-matches rather than under-matches.
+_SECRET_REF_RE = r"""!secret\s+['"]?([^\s'"]+)"""
+
+
+def _parse_remote_pkg_dirs(stderr: bytes) -> list[Path]:
+    """Extract the de-duplicated checkout dirs the bundle subprocess reported."""
+    seen: dict[Path, None] = {}
+    for line in stderr.decode("utf-8", errors="replace").splitlines():
+        if line.startswith(REMOTE_PKG_DIR_MARKER):
+            seen[Path(line[len(REMOTE_PKG_DIR_MARKER):].strip())] = None
+    return list(seen)
+
+
+def merge_remote_package_secrets(
+    bundle: bytes, config_dir: str | Path, pkg_dirs: list[Path],
+) -> bytes:
+    """GitHub #154: add secrets referenced by git-package checkouts to *bundle*.
+
+    Backport of esphome/esphome#18053 (ESPHome 2026.8.0) for servers
+    bundling with ESPHome 2026.4–2026.7. Scans every YAML in each checkout
+    (excluding ``.git/``) for ``!secret`` refs — same over-inclusive scope as
+    upstream's ``add_secret_scan_dir`` — and merges any key missing from the
+    bundle's ``secrets.yaml`` in from ``<config_dir>/secrets.yaml``, which is
+    where those refs resolve at build time. Returns *bundle* unchanged
+    (same object) when nothing needs adding.
+    """
+    import json  # noqa: PLC0415 — local like the other yaml/json users here
+    import re  # noqa: PLC0415
+
+    import yaml  # noqa: PLC0415
+
+    if not pkg_dirs:
+        return bundle
+    secrets_path = Path(config_dir) / SECRETS_YAML
+    if not secrets_path.is_file():
+        return bundle
+
+    secret_re = re.compile(_SECRET_REF_RE)
+    used: set[str] = set()
+    for pkg_dir in pkg_dirs:
+        for f in sorted(pkg_dir.rglob("*")):
+            if f.suffix not in (".yaml", ".yml") or ".git" in f.relative_to(pkg_dir).parts:
+                continue
+            try:
+                used.update(secret_re.findall(f.read_text(errors="replace")))
+            except OSError:
+                continue
+    if not used:
+        return bundle
+
+    with tarfile.open(fileobj=io.BytesIO(bundle), mode="r:gz") as tar:
+        members: list[tuple[tarfile.TarInfo, bytes | None]] = []
+        for m in tar.getmembers():
+            fobj = tar.extractfile(m) if m.isfile() else None
+            members.append((m, fobj.read() if fobj is not None else None))
+
+    bundled: dict = {}
+    for m, data in members:
+        if m.name == SECRETS_YAML and data is not None:
+            bundled = yaml.safe_load(data) or {}
+    missing = used - set(bundled)
+    if not missing:
+        return bundle
+
+    try:
+        all_secrets = yaml.safe_load(secrets_path.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("Bundle: can't read %s to backfill remote-package secrets: %s",
+                       secrets_path, exc)
+        return bundle
+    if not isinstance(all_secrets, dict):
+        return bundle
+    added = {k: all_secrets[k] for k in sorted(missing) if k in all_secrets}
+    if not added:
+        return bundle
+
+    merged = yaml.safe_dump({**bundled, **added}, default_flow_style=False,
+                            sort_keys=False).encode("utf-8")
+    logger.info("Bundle: added %d secret(s) referenced by git packages (%s)",
+                len(added), ", ".join(added))
+
+    def _bytes_member(name: str, data: bytes, like: tarfile.TarInfo | None) -> tuple[tarfile.TarInfo, bytes]:
+        info = tarfile.TarInfo(name)
+        if like is not None:
+            info.mode, info.mtime = like.mode, like.mtime
+        info.size = len(data)
+        return info, data
+
+    out_members: list[tuple[tarfile.TarInfo, bytes | None]] = []
+    wrote_secrets = False
+    for m, data in members:
+        if m.name == SECRETS_YAML:
+            out_members.append(_bytes_member(SECRETS_YAML, merged, m))
+            wrote_secrets = True
+        elif m.name == "manifest.json" and data is not None:
+            try:
+                manifest = json.loads(data)
+                manifest["has_secrets"] = True
+                data = json.dumps(manifest, indent=2).encode("utf-8")
+            except (ValueError, TypeError):
+                pass
+            out_members.append(_bytes_member(m.name, data, m))
+            if not wrote_secrets:
+                out_members.append(_bytes_member(SECRETS_YAML, merged, m))
+                wrote_secrets = True
+        else:
+            out_members.append((m, data))
+    if not wrote_secrets:
+        out_members.insert(0, _bytes_member(SECRETS_YAML, merged, None))
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for info, data in out_members:
+            tar.addfile(info, io.BytesIO(data) if data is not None else None)
+    return buf.getvalue()
 
 
 def _venv_python() -> str:
@@ -641,7 +783,9 @@ def create_bundle(config_dir: str, target: str) -> bytes:
             f"bundle subprocess exited {proc.returncode}: "
             f"{proc.stderr.decode('utf-8', errors='replace').strip()}"
         )
-    data = proc.stdout
+    data = merge_remote_package_secrets(
+        proc.stdout, config_dir, _parse_remote_pkg_dirs(proc.stderr),
+    )
     logger.info(
         "Bundle for %s: %d bytes (subprocess-isolated validation)",
         target, len(data),
