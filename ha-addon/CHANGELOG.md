@@ -1,20 +1,50 @@
 # Changelog
 
-## Unreleased
+## 1.8.0
 
-**Workers stay in the list until you delete them.** Previously a build worker vanished from the Workers tab the moment it shut down cleanly, and every worker disappeared whenever the add-on restarted — so a worker you'd tagged and configured could silently drop out of view, and a worker that came back after a wipe showed up as a second, duplicate row. Now the worker list is saved to disk and survives restarts, a stopped worker simply shows as offline with how long it's been gone, and a worker returning without its saved identity takes over its old row instead of creating a new one. The per-row Actions menu gains a **Delete** item, which is the only way a worker leaves the list; it's disabled with an explanation while the worker is online (a running worker would just re-register) and for the built-in worker. Remote workers pick up the matching client-side change through the usual automatic source update.
+Thread and Matter devices can finally be flashed from any build worker, workers that can't reach a device hand the flash to the add-on instead of failing, and a round of fixes for the problems that showed up when ESPHome 2026.10 landed.
 
-**ESP32 builds no longer fail the first time a new ESPHome version arrives.** On a build worker running more than one build at a time, upgrading the fleet to ESPHome 2026.10.0 could fail a batch of ESP32 devices with "Failed to download from all mirrors" or "Install ESP-IDF … Python dependencies failure." The protection from 1.7.3, which lets only one build download a new ESP32 toolchain, was being switched off too early: an ESP8266 build, or a leftover toolchain from the previous ESPHome release, made the worker think the new toolchain was already in place. Workers now check for the exact toolchain version the ESPHome release needs, so the first ESP32 build downloads it alone and the rest wait for it. Re-queue any devices that failed this way and they'll build normally.
+### New
 
-**Devices built from online packages pick up upstream fixes again.** If a device's YAML pulls packages or external components from GitHub (for example the Kauf plug configs), the add-on kept using the first copy it ever downloaded and never refreshed it. When a new ESPHome release needed an updated version of that package, those devices kept failing with an error from the old copy, even after the package author had published a fix. Packages are now refreshed on the same schedule ESPHome itself uses (daily by default, or never for sources you've pinned).
+**Flash Thread and Matter devices from any build worker.** Thread devices sit on a mesh network that only the Home Assistant machine can reach, so a remote build worker could compile their firmware but every upload failed. Fleet now detects Thread devices automatically: any worker compiles the firmware and the add-on flashes it over the mesh itself. The Queue tab shows the extra flashing step. Thanks to @htilly.
+
+**Workers that can't reach a device no longer fail the job.** If a build worker can compile but can't reach a device (a separate VLAN, a firewall, a cloud worker with no route home), it now checks before uploading, finishes the compile, and hands the firmware to the add-on to flash. Same mechanism as Thread devices. Set `OTA_REACHABILITY_CHECK=0` on a worker to turn it off.
 
 **Watch an upgrade from start to finish without clicking around.** Upgrading a single device now opens its build log straight away (with a "waiting for a worker" note while it's queued), and once the new firmware is flashed successfully it switches to that device's live logs so you can watch it boot. Bulk upgrades still just take you to the Queue tab, and nothing pops up for failed builds or download-only compiles.
 
 **Get notified when a new ESPHome release comes out.** The Home Assistant integration adds two entities to the Fleet hub device: **Latest ESPHome version** and **ESPHome update available**, which turns on while a stable release newer than the one Fleet compiles with is out (betas are ignored). The docs include a ready-to-copy automation that sends you a notification when it flips.
 
+**Workers stay in the list until you delete them.** Previously a build worker vanished from the Workers tab the moment it shut down cleanly, and every worker disappeared whenever the add-on restarted — so a worker you'd tagged and configured could silently drop out of view, and a worker that came back after a wipe showed up as a second, duplicate row. Now the worker list is saved to disk and survives restarts, a stopped worker simply shows as offline with how long it's been gone, and a worker returning without its saved identity takes over its old row instead of creating a new one. The per-row Actions menu gains a **Delete** item, which is the only way a worker leaves the list; it's disabled with an explanation while the worker is online (a running worker would just re-register) and for the built-in worker. Remote workers pick up the matching client-side change through the usual automatic source update.
+
 **Pick an accent colour.** Settings → Display has a new Accent colour row with eight presets. Indigo stays the default, and each colour is tuned to stay readable in both light and dark mode.
 
+**Config history diffs are easier to read.** The history drawer's diff view now marks every change in the scrollbar and folds away unchanged sections, GitHub-style, so a one-line edit in a long config is easy to spot.
+
 **Kubernetes: sidecars, init containers and extra volumes.** Both Helm charts now accept `initContainers`, `extraContainers`, `extraVolumes` and `extraVolumeMounts`, so you can, for example, run git-sync to pull your ESPHome YAML straight from a Git repository. The server chart's README has a worked example.
+
+### Fixes
+
+**"ESPHome install failed" right after an ESPHome update.** When the ESPHome add-on updated, Fleet could start installing the new version twice at the same moment (once for the version change, once for the switch in the UI), and the two installs wiped each other out. Retrying could hit the same collision with the built-in worker. Installs of the same version now wait for each other, and the second one reuses the first's result.
+
+**ESP32 builds no longer fail the first time a new ESPHome version arrives.** On a build worker running more than one build at a time, upgrading the fleet to ESPHome 2026.10.0 could fail a batch of ESP32 devices with "Failed to download from all mirrors" or "Install ESP-IDF … Python dependencies failure." The protection from 1.7.3, which lets only one build download a new ESP32 toolchain, was being switched off too early: an ESP8266 build, or a leftover toolchain from the previous ESPHome release, made the worker think the new toolchain was already in place. Workers now check for the exact toolchain version the ESPHome release needs, so the first ESP32 build downloads it alone and the rest wait for it. Re-queue any devices that failed this way and they'll build normally.
+
+**Devices built from online packages pick up upstream fixes again.** If a device's YAML pulls packages or external components from GitHub (for example the Kauf plug configs), the add-on kept using the first copy it ever downloaded and never refreshed it. When a new ESPHome release needed an updated version of that package, those devices kept failing with an error from the old copy, even after the package author had published a fix. Packages are now refreshed on the same schedule ESPHome itself uses (daily by default, or never for sources you've pinned).
+
+**Entities going "unavailable" after every Home Assistant restart.** Per-device and per-worker entities from the Fleet integration showed "This entity is no longer being provided" after each restart or integration reload. They now come back every time.
+
+**Changing a device's static IP in its YAML now updates the address Fleet shows and uses.** Previously the Devices tab kept the first address it ever saw, and mDNS could overwrite a pinned static IP.
+
+**"ESPHome install failed" after an add-on update that changed the Python version.** The cached ESPHome install is now rebuilt automatically instead of staying broken.
+
+**Compiles started while ESPHome is still installing no longer fail with a YAML error.** They wait and start once the install finishes.
+
+**Clearer install errors.** When a worker's image is too old for the ESPHome version you picked, the error now says so instead of claiming the release doesn't exist. Very slow hosts can raise the install time limit with the `ESPHOME_INSTALL_TIMEOUT` worker setting.
+
+**Add-on fails to start because port 8765 is taken.** The log now says plainly that another add-on (usually OpenThread Border Router) holds the port and how to fix it, instead of looking like a normal shutdown.
+
+**Large build workers no longer refuse every job as "disk full".** A worker on a multi-terabyte drive above 95% use still has plenty of space; the disk-full check now also looks at actual free space. Thanks to @htilly.
+
+**Smaller worker fixes.** ESP32 builds made with ESPHome's newer ESP-IDF toolchain now keep their OTA firmware file, a half-finished ESPHome install repairs itself, and a slow config validation no longer freezes the web UI. Thanks to @htilly.
 
 **Remote build workers must rebuild their Docker image** after this update. A dependency refresh in the worker image moved the minimum image version, so a worker still on the old image shows as needing an upgrade in the Workers list and won't take jobs until it's rebuilt; the built-in worker updates automatically with the add-on.
 
