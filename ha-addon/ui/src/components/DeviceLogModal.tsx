@@ -16,9 +16,17 @@ import { Button } from './ui/button';
 interface Props {
   target: string;
   onClose: () => void;
+  /** #137 handover: opened right after a successful OTA, so the device is
+   *  probably still rebooting and the first API connection may fail. Keep
+   *  reconnecting for a bounded window instead of stopping at "closed". */
+  awaitBoot?: boolean;
 }
 
-export function DeviceLogModal({ target, onClose }: Props) {
+// Bounded so a device that never comes back doesn't retry forever.
+const BOOT_RETRY_DELAY_MS = 3_000;
+const BOOT_RETRY_WINDOW_MS = 90_000;
+
+export function DeviceLogModal({ target, onClose, awaitBoot = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerMounted, setContainerMounted] = useState(false);
   const termRef = useRef<Terminal | null>(null);
@@ -74,24 +82,42 @@ export function DeviceLogModal({ target, onClose }: Props) {
 
     // Open WebSocket to the device log endpoint
     const wsPath = `ui/api/targets/${encodeURIComponent(target)}/logs/ws`;
-    try {
-      const ws = new WebSocket(buildWsUrl(wsPath));
+    const openedAt = Date.now();
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function connect() {
+      if (disposed) return;
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(buildWsUrl(wsPath));
+      } catch {
+        term.write('Failed to open WebSocket connection.\r\n');
+        return;
+      }
       ws.onmessage = (e) => {
         if (termRef.current) termRef.current.write(e.data as string);
       };
       ws.onerror = () => {
-        if (termRef.current) termRef.current.write('\r\nWebSocket error — connection failed.\r\n');
+        if (!awaitBoot && termRef.current) termRef.current.write('\r\nWebSocket error — connection failed.\r\n');
       };
       ws.onclose = () => {
         wsRef.current = null;
-        if (termRef.current) termRef.current.write('\r\n[Connection closed]\r\n');
+        if (disposed || !termRef.current) return;
+        if (awaitBoot && Date.now() - openedAt < BOOT_RETRY_WINDOW_MS) {
+          termRef.current.write('\r\n[Waiting for the device to finish rebooting — reconnecting…]\r\n');
+          retryTimer = setTimeout(connect, BOOT_RETRY_DELAY_MS);
+          return;
+        }
+        termRef.current.write('\r\n[Connection closed]\r\n');
       };
       wsRef.current = ws;
-    } catch {
-      term.write('Failed to open WebSocket connection.\r\n');
     }
+    connect();
 
     return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
       if (wsRef.current) {
         try { wsRef.current.close(); } catch { /* ignore */ }
         wsRef.current = null;
@@ -101,7 +127,7 @@ export function DeviceLogModal({ target, onClose }: Props) {
         termRef.current = null;
       }
     };
-  }, [target, containerMounted]);
+  }, [target, containerMounted, awaitBoot]);
 
   const handleCopy = () => copyTerminalText(termRef.current);
   const handleDownload = () => downloadTerminalText(termRef.current, stripYaml(target) + '-live');

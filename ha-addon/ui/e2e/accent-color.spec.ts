@@ -34,9 +34,11 @@ test('picking an accent swatch PATCHes the setting and re-themes the root CSS va
   expect(body).toEqual({ accent_color: expected });
 
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'teal');
-  // Dark-theme teal; shadcn --primary / --ring follow --accent.
+  // Dark-theme teal for accent text and the focus ring; --primary (button
+  // background) is pinned to the darker teal so white button labels keep
+  // >= 4.5:1 contrast — the bright #0d9488 only reaches 3.7:1.
   await expect.poll(() => rootVar(page, '--accent')).toBe('#0d9488');
-  await expect.poll(() => rootVar(page, '--primary')).toBe('#0d9488');
+  await expect.poll(() => rootVar(page, '--primary')).toBe('#0f766e');
   await expect.poll(() => rootVar(page, '--ring')).toBe('#0d9488');
   await expect(picker.getByRole('button', { name: 'Teal' })).toHaveAttribute('aria-pressed', 'true');
   await expect(picker.getByRole('button', { name: 'Indigo (default)' })).toHaveAttribute('aria-pressed', 'false');

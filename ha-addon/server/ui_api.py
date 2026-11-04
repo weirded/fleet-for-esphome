@@ -2524,7 +2524,12 @@ async def start_compile(request: web.Request) -> web.Response:
         # not touch the device". Letting server_ota through here would run
         # _server_ota_push once the compile lands and flash a device the
         # user explicitly asked us not to flash.
-        _target_meta = get_device_metadata(cfg.config_dir, target)
+        # Executor: a cache miss runs full ESPHome validation (and first-time
+        # remote-source clones) — on the event loop that stalled every HTTP
+        # request and worker heartbeat for the length of a bulk enqueue.
+        _target_meta = await asyncio.get_running_loop().run_in_executor(
+            None, get_device_metadata, cfg.config_dir, target,
+        )
         _is_thread = _target_meta.get("network_type") == "thread"
         effective_server_ota = (
             not download_only
@@ -3046,7 +3051,9 @@ async def rename_target(request: web.Request) -> web.Response:
     from settings import get_settings as _gs  # noqa: PLC0415
     from git_versioning import get_head as _get_head  # noqa: PLC0415
     # SOTA.3: detect Thread target for rename-triggered recompile.
-    _rename_meta = get_device_metadata(_cfg(request).config_dir, new_filename)
+    _rename_meta = await asyncio.get_running_loop().run_in_executor(
+        None, get_device_metadata, _cfg(request).config_dir, new_filename,
+    )
     _rename_server_ota = _rename_meta.get("network_type") == "thread"
     await queue.enqueue(
         target=new_filename,

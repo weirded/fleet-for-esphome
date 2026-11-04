@@ -42,4 +42,3 @@ Allow compiling on VPS servers not on the local network. Builds on 1.4's firmwar
 - [ ] **RC.4 GitHub Actions integration** — optional: trigger builds via GitHub Actions workflow
 
 ## Open Bugs & Tweaks
-

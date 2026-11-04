@@ -79,6 +79,13 @@ export function LogModal({ source, queue, workers, onClose, onRetry, onEdit, onO
   // #137: the log can be opened for a job the queue poll hasn't
   // delivered yet; re-run the stream setup once it shows up.
   const jobPresent = job !== null;
+  // Server-side OTA (Thread / unreachable device) appends its diagnostics
+  // to job.log after the worker's stream has ended, without a WS frame.
+  // Re-load the finished log whenever the OTA outcome changes so a failed
+  // flash shows up without closing and reopening the dialog.
+  const otaRefreshKey = job && !['working', 'pending'].includes(job.state)
+    ? `${job.state}:${job.ota_result ?? ''}`
+    : '';
 
   // Derive a stable string identity for the source so the xterm/WS
   // effect below only re-runs when the *target* changes, not on every
@@ -269,7 +276,7 @@ export function LogModal({ source, queue, workers, onClose, onRetry, onEdit, onO
     // App.tsx re-creates the object every render so using it here
     // would tear down xterm 1 Hz.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceKey, containerMounted, startJobPolling, jobPresent]);
+  }, [sourceKey, containerMounted, startJobPolling, jobPresent, otaRefreshKey]);
 
   // Compute header contents from current state
   let modalTitle = '';
