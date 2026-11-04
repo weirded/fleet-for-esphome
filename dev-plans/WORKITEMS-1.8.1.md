@@ -25,7 +25,7 @@ Theme: **Patch fast-follow to 1.8.0: a git-packages secrets fix and a README tha
 
 ## Community
 
-- [ ] **PR.315** — [weirded/fleet-for-esphome#315](https://github.com/weirded/fleet-for-esphome/pull/315) (anddon): worker computes `cache_size_mb` from the background disk-usage sampler instead of walking `cache/` + `slots/` every heartbeat (~3 % of a core → ~0 on idle workers), and adds `cached_targets` / `cache_size_mb` to `SystemInfo` so the Workers tab cache line finally renders (the UI already reads both; the server was dropping them). Additive optional protocol fields (PY-6 OK); `.py`-only → reaches workers via source auto-update, no image bump. Its earlier red `audit`/`frontend` checks were a stale base (pre-1.8.0 aiohttp/DOMPurify); branch updated onto `develop`, fork workflows approved.
+- [x] **PR.315** *(1.9.0-dev.5)* — [weirded/fleet-for-esphome#315](https://github.com/weirded/fleet-for-esphome/pull/315) (anddon): worker computes `cache_size_mb` from the background disk-usage sampler instead of walking `cache/` + `slots/` every heartbeat (~3 % of a core → ~0 on idle workers), and adds `cached_targets` / `cache_size_mb` to `SystemInfo` so the Workers tab cache line finally renders (the UI already reads both; the server was dropping them). Additive optional protocol fields (PY-6 OK); `.py`-only → reaches workers via source auto-update, no image bump. Its earlier red `audit`/`frontend` checks were a stale base (pre-1.8.0 aiohttp/DOMPurify); branch updated onto `develop`, fork workflows approved, all 47 checks green, merged as `41ee21b`.
 
 ## Not in this release
 
