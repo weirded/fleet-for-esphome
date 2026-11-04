@@ -43,3 +43,5 @@ Allow compiling on VPS servers not on the local network. Builds on 1.4's firmwar
 
 ## Open Bugs & Tweaks
 
+
+- [x] **RM.1** *(1.9.0-dev.2)* — README "Why use this instead of the ESPHome Device Builder?" rewritten against Device Builder 1.26 / ESPHome 2026.10: dropped claims the stock builder now matches (job queue, remote builds, labels, table view, bulk update), leading with version pinning, scheduled upgrades, firmware archive, pairing-free workers with direct OTA + add-on fallback, routing rules, restore UI, HA entities.
