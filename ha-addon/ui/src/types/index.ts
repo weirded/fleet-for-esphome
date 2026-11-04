@@ -411,6 +411,9 @@ export interface Job {
    * the "Diff since compile" button in the log modal to open the
    * History panel pre-set to (from=this_hash, to=working tree). */
   config_hash?: string | null;
+  /** Compile run this job belongs to (shared by every job of one
+   * /ui/api/compile POST). #137: lets the UI find the job it just enqueued. */
+  run_id?: string;
   /** Bug #8 (1.6.1): why this worker got the job. One of
    *  "pinned_to_worker" / "only_online_worker" /
    *  "only_eligible_worker" / "fewer_jobs_than_others" /

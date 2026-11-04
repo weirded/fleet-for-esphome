@@ -1,5 +1,5 @@
-aiohttp>=3.14.3
-pydantic>=2.13.5
+aiohttp>=3.14.4
+pydantic>=2.14.2
 croniter>=6.2.4
 apscheduler>=3.11.3,<4
 # Upper bound is deliberate. 46.0.0 landed ConnectionClosedEvent for API
@@ -8,9 +8,9 @@ apscheduler>=3.11.3,<4
 # sys.modules.setdefault("aioesphomeapi", MagicMock())), so CI cannot
 # detect a 46.x behaviour change on the live device-polling path. Floor
 # bumped to the version dependabot asked for; the 46.x move gets its own
-# evaluation. See DEP.3 in dev-plans/WORKITEMS-1.8.md.
+# evaluation. See DEP.3 in dev-plans/WORKITEMS-future.md.
 aioesphomeapi>=45.12.1,<46
-zeroconf>=0.151.3
+zeroconf>=0.151.5
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
 # boot, scanner.ensure_esphome_installed lazy-installs the HA ESPHome
@@ -29,7 +29,7 @@ icmplib>=3.0.4
 # deadlocked-interpreter edge case, so that path is unaffected.
 
 # Transitive of requests/aiohttp; floor bumped to clear PYSEC-2026-215 (fix in 3.15).
-idna>=3.19
+idna>=3.20
 
 # Transitive of aioesphomeapi / noiseprotocol / chacha20poly1305-reuseable
 # (the Noise-encrypted ESPHome API path). Floor bumped to clear
@@ -40,4 +40,12 @@ idna>=3.19
 # exploitable here. Bumped rather than PY-7-ignored because 50.0.0 resolves
 # cleanly against our pins — an ignore would have to be re-justified on
 # every future audit run, and a real fix does not.
-cryptography>=50.0.1
+cryptography>=50.0.2
+
+# Transitives pinned old in the lock (refresh-deps.sh runs without
+# --upgrade); floors bumped to clear pip-audit findings (2026-11-04):
+# multidict PYSEC-2026-4244 (aiohttp), certifi PYSEC-2026-4320 and
+# urllib3 PYSEC-2026-4175/4176/4177 (requests).
+multidict>=6.9.1
+certifi>=2026.10.18
+urllib3>=2.8.0

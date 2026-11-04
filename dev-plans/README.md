@@ -6,8 +6,8 @@ Roadmap and bug tracking for Fleet for ESPHome, organized by release.
 
 Each WORKITEMS file's first paragraph is the authoritative theme — read the file, not this index.
 
-- **[WORKITEMS-1.8.md](WORKITEMS-1.8.md)** — **Current release.** LLM assistance, plus the Honest Gold tier flip + i18n/German carried forward from 1.7.2.
-- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — ESPHome dashboard parity.
+- **[WORKITEMS-1.8.1.md](WORKITEMS-1.8.1.md)** — **Next release (patch).** Git-packages secrets fix + README refresh vs. the ESPHome Device Builder.
+- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — Following release. ESPHome dashboard parity.
 - **[WORKITEMS-future.md](WORKITEMS-future.md)** — Unscheduled backlog.
 - **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Security audit findings.
 - **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — Release process.
@@ -31,6 +31,7 @@ Historical release plans for versions already shipped. Themes only — details l
 - **[archive/WORKITEMS-1.7.1.md](archive/WORKITEMS-1.7.1.md)** — Brand refresh: "ESPHome Fleet" → "Fleet for ESPHome". <!-- br1-allow: rebrand-history pointer -->
 - **[archive/WORKITEMS-1.7.2.md](archive/WORKITEMS-1.7.2.md)** — ESPHome 2026.7 support + polish.
 - **[archive/WORKITEMS-1.7.3.md](archive/WORKITEMS-1.7.3.md)** — ESPHome 2026.7 toolchain fallout + dependency sweep.
+- **[archive/WORKITEMS-1.8.md](archive/WORKITEMS-1.8.md)** — Worker lifecycle, install/toolchain race fixes, ESPHome release sensors, Helm sidecars. The planned LLM-assistance theme did not ship; its items moved to `WORKITEMS-future.md`.
 
 ## How this works
 

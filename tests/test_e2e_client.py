@@ -583,7 +583,7 @@ class TestFirmwareUploadOrdering:
 # ---------------------------------------------------------------------------
 
 # Override with ESPHOME_TEST_VERSION env var if you want a different version.
-ESPHOME_TEST_VERSION = os.environ.get("ESPHOME_TEST_VERSION", "2026.7.3")
+ESPHOME_TEST_VERSION = os.environ.get("ESPHOME_TEST_VERSION", "2026.10.2")
 
 _COMPILE_TEST_YAML = """\
 esphome:

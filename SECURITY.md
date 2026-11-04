@@ -4,9 +4,9 @@
 
 | Version  | Supported          |
 |----------|--------------------|
-| 1.7.3    | ✅ Current release  |
-| 1.7.2    | ✅ Previous stable — security fixes only if trivially backportable |
-| < 1.7.2  | ❌ No patches       |
+| 1.8.0    | ✅ Current release  |
+| 1.7.3    | ✅ Previous stable — security fixes only if trivially backportable |
+| < 1.7.3  | ❌ No patches       |
 
 *(Note: the 1.5 release was developed as `1.4.1-dev.N` through dev.72 and renumbered late cycle as scope grew beyond a patch release. Docker tags with the `1.4.1-dev.N` stamp remain pullable from GHCR but are superseded by the 1.5.x stable tags.)*
 
@@ -100,7 +100,14 @@ These are accepted risks within the home-network threat model; see the full audi
 
 ### Residual posture
 
-All 21 audit findings are now FIXED, WONTFIX-by-threat-model, or marked INFO. Cycle deltas for 1.7.3 (no F-* status flips):
+All 21 audit findings are now FIXED, WONTFIX-by-threat-model, or marked INFO. Cycle deltas for 1.8.0 (no F-* status flips):
+
+- **The two moderate DOMPurify findings from 1.7.3 are gone.** `monaco-editor` moved to 0.56.0, and a pre-release dependency sweep cleared every high/critical `npm audit` finding (DOMPurify, undici, proxy-addr, fast-uri, vite and others). `npm audit --audit-level=high --omit=dev` is clean; what remains is moderate/low and dev-only.
+- **Python security floors raised.** `aiohttp` 3.14.4+ (lock: 3.14.5) for its batch of 2026 CVEs, plus `cryptography`, `idna`, `multidict`, `certifi` and `urllib3` floors to clear `pip-audit`. Lockfiles regenerated with `--generate-hashes` on linux/amd64. The worker image changed, so `MIN_IMAGE_VERSION` moved and remote workers must rebuild.
+- **The add-on now performs some OTA uploads itself.** For Thread/Matter devices, and for devices a worker reports it cannot reach, a worker compiles and uploads the binary to the add-on, which then runs `esphome upload` against the device. This adds no new listener and uses the existing authenticated worker endpoints; the add-on already had LAN access to devices for polling. Like every other job result, the request isn't checked against which worker claimed the job (see the accepted-risk list above): workers are trusted.
+- **Worker list persisted to `/data/workers.json`** (non-secret registry metadata), and a new UI endpoint deletes offline workers. It sits behind the same Ingress / direct-port Bearer rules as every other `/ui/api/*` route.
+
+Cycle deltas for 1.7.3 (no F-* status flips):
 
 - **Both open HIGH Dependabot alerts closed.** `fast-uri` (< 3.1.4) and `brace-expansion` (< 5.0.7). The `fast-uri` bullet under the 1.7.1 deltas below recorded `first_patched_version: null` — "nothing to upgrade to" — and said to re-evaluate; upstream has since published 3.1.4, so the accepted-risk note is superseded and the `fast-uri-DEV` WONTFIX is retired. Both packages remain **dev-only** (`eslint → minimatch` and `shadcn → @modelcontextprotocol/sdk → ajv`) and never reach a production bundle. `npm audit --audit-level=high --omit=dev` is clean.
 - **Two MODERATE production findings remain, deliberately.** Nine DOMPurify advisories reached through `monaco-editor` 0.55.1; the only fix is monaco 0.56.0, which breaks the editor build (moved module paths, `inlineSuggest.enabled` changed from boolean to a string union). Held back and tracked as DEP.2. Not exploitable here: every advisory is in DOMPurify's markdown/HTML sanitisation path, and the editor passes completion documentation as a plain string rather than a markdown object and registers no hover provider, so that path is never reached.

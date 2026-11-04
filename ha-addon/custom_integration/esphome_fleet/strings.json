@@ -112,6 +112,9 @@
   },
   "entity": {
     "binary_sensor": {
+      "esphome_update_available": {
+        "name": "ESPHome update available"
+      },
       "online": {
         "name": "Online"
       },
@@ -147,6 +150,9 @@
       },
       "fleet_version": {
         "name": "Fleet version"
+      },
+      "latest_esphome_version": {
+        "name": "Latest ESPHome version"
       },
       "memory": {
         "name": "Memory"

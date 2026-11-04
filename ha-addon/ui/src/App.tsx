@@ -71,11 +71,12 @@ import {
 import { WorkersTab } from './components/WorkersTab';
 import { RoutingRulesModal } from './components/RoutingRulesModal';
 import type { Device, Job, Target, Worker } from './types';
-import { setDateFormatPref, setTimeFormatPref, stripYaml } from './utils';
+import { isJobInProgress, setDateFormatPref, setTimeFormatPref, stripYaml } from './utils';
 import { downloadTextFile } from './utils/terminal';
 import esphomeLogoUrl from './assets/esphome-logo.svg';
 import i18n from './i18n';
 import './theme.css';
+import { applyAccentColor } from './lib/accent';
 
 // I18N.2 (#141): map `AppSettings.language` to an i18next locale.
 // 'auto' resolves to the browser's preferred language; an unknown
@@ -268,6 +269,13 @@ export default function App() {
     const size = appSettings?.font_size ?? 'normal';
     root.setAttribute('data-font-size', size);
   }, [appSettings?.font_size]);
+  // #150: stamp data-accent on <html>; theme.css maps each preset to
+  // --accent / --accent-hover (and --primary / --ring follow). main.tsx
+  // pre-applies the last-known value from localStorage so a reload
+  // doesn't flash the default accent while settings load.
+  useEffect(() => {
+    if (appSettings?.accent_color) applyAccentColor(appSettings.accent_color);
+  }, [appSettings?.accent_color]);
   // Poll at 1 Hz for live-feeling updates. Workers + queue are pure in-memory
   // reads. Targets/devices does a readdir + per-target stat() for mtime cache
   // checks (metadata resolution is cached and only re-fires when a file
@@ -329,11 +337,17 @@ export default function App() {
   }, [streamerMode]);
 
   const [logJobId, setLogJobId] = useState<string | null>(null);
+  // #137: tracks whether the open job log has seen the job in progress
+  // (drives the build-log → live-logs hand-over below).
+  const logWatchRef = useRef<{ jobId: string; sawInProgress: boolean } | null>(null);
   // WL.3: separate state for the worker-log dialog; both feed the same
   // `<LogModal>` but only one can be open at a time (they share the
   // xterm + WS transport).
   const [logWorkerId, setLogWorkerId] = useState<string | null>(null);
   const [deviceLogTarget, setDeviceLogTarget] = useState<string | null>(null);
+  // #137: true only for the post-OTA handover, so the live-log view keeps
+  // reconnecting while the freshly flashed device reboots.
+  const [deviceLogAwaitBoot, setDeviceLogAwaitBoot] = useState(false);
   const [editorTarget, setEditorTarget] = useState<string | null>(null);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [connectModalPreset, setConnectModalPreset] = useState<import('./types').WorkerPreset | null>(null);
@@ -471,7 +485,7 @@ export default function App() {
       }
       // Bug #107: bulk path enqueues the entire set in one POST so the
       // server-side counter / toast reads correctly (`Queued N device(s)`).
-      await compile(
+      const resp = await compile(
         ctx.targets,
         params.pinnedClientId ?? undefined,
         params.esphomeVersion ?? undefined,
@@ -491,12 +505,65 @@ export default function App() {
       const verb = params.downloadOnly ? 'Compile-and-download queued for' : 'Queued';
       addToast(`${verb} ${ctx.displayName}${workerSuffix}${versionSuffix}${pinSuffix}`, 'success');
       switchTab('queue');
-      mutateQueue();
       mutateDevices();
+      const freshQueue = await mutateQueue();
+      // #137: single-device upgrade → open the new job's build log right
+      // away (bulk keeps the plain Queue-tab landing). Match on run_id;
+      // when the server deduped onto an already-pending job (enqueued=0)
+      // fall back to that target's in-flight job.
+      if (ctx.targets.length === 1 && freshQueue) {
+        const target = ctx.targets[0];
+        const job =
+          (resp.run_id ? freshQueue.find(j => j.run_id === resp.run_id && j.target === target) : undefined)
+          ?? (resp.enqueued === 0
+            ? freshQueue.find(j => j.target === target && !j.validate_only && isJobInProgress(j))
+            : undefined);
+        if (job) {
+          logWatchRef.current = { jobId: job.id, sawInProgress: true };
+          setLogWorkerId(null);
+          setLogJobId(job.id);
+        }
+      }
     } catch (err) {
       addToast('Error: ' + (err as Error).message, 'error');
     }
   }
+
+  // #137: while a job's build log is open, watch for it to finish with a
+  // successful OTA and hand over to the device's live logs. Only fires
+  // when the log was open while the job was still in progress (either
+  // auto-opened above or opened manually mid-run) — never for a log the
+  // user opened on an already-finished job, never for failed /
+  // compile-only / download-only jobs, and not while the editor is open
+  // (the log is stacked over it there).
+  useEffect(() => {
+    if (!logJobId) {
+      logWatchRef.current = null;
+      return;
+    }
+    const job = queue.find(j => j.id === logJobId);
+    if (!job) return;
+    if (logWatchRef.current?.jobId !== logJobId) {
+      logWatchRef.current = { jobId: logJobId, sawInProgress: false };
+    }
+    if (isJobInProgress(job)) {
+      logWatchRef.current.sawInProgress = true;
+      return;
+    }
+    if (
+      logWatchRef.current.sawInProgress
+      && job.state === 'success'
+      && job.ota_result === 'success'
+      && !job.validate_only
+      && !job.download_only
+      && !editorTarget
+    ) {
+      logWatchRef.current = null;
+      setLogJobId(null);
+      setDeviceLogAwaitBoot(true);
+      setDeviceLogTarget(job.target);
+    }
+  }, [logJobId, queue, editorTarget]);
 
   // #25/#26: validation result returned directly to the caller (the editor)
   // so it can show the output inline.
@@ -1057,7 +1124,8 @@ export default function App() {
       {deviceLogTarget && (
         <DeviceLogModal
           target={deviceLogTarget}
-          onClose={() => setDeviceLogTarget(null)}
+          awaitBoot={deviceLogAwaitBoot}
+          onClose={() => { setDeviceLogTarget(null); setDeviceLogAwaitBoot(false); }}
         />
       )}
 

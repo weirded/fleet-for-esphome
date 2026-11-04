@@ -8,6 +8,7 @@ YAML comment block (source of truth) — APScheduler is the execution engine.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -65,7 +66,10 @@ async def _fire_recurring(target: str) -> None:
     from git_versioning import get_head  # noqa: PLC0415
     from pathlib import Path as _P  # noqa: PLC0415
     from scanner import get_device_metadata as _gdm  # noqa: PLC0415
-    _tmeta = _gdm(cfg.config_dir, target)
+    # Executor: a metadata cache miss runs full ESPHome validation.
+    _tmeta = await asyncio.get_running_loop().run_in_executor(
+        None, _gdm, cfg.config_dir, target,
+    )
     server_ota = _tmeta.get("network_type") == "thread"
     job = await queue.enqueue(
         target=target,
@@ -119,7 +123,10 @@ async def _fire_once(target: str) -> None:
     from git_versioning import get_head  # noqa: PLC0415
     from pathlib import Path as _P  # noqa: PLC0415
     from scanner import get_device_metadata as _gdm  # noqa: PLC0415
-    _tmeta = _gdm(cfg.config_dir, target)
+    # Executor: a metadata cache miss runs full ESPHome validation.
+    _tmeta = await asyncio.get_running_loop().run_in_executor(
+        None, _gdm, cfg.config_dir, target,
+    )
     server_ota = _tmeta.get("network_type") == "thread"
     job = await queue.enqueue(
         target=target,

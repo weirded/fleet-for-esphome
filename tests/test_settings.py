@@ -213,6 +213,50 @@ async def test_font_size_defaults_to_normal(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #150 — accent_color preset enum
+# ---------------------------------------------------------------------------
+
+
+async def test_accent_color_defaults_to_indigo(tmp_path):
+    """Default must stay the pre-#150 accent so existing installs don't change."""
+    s = init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    assert s.accent_color == "indigo"
+
+
+async def test_update_settings_accepts_every_accent_preset(tmp_path):
+    from settings import ACCENT_COLORS
+
+    init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    for val in ACCENT_COLORS:
+        updated = await update_settings({"accent_color": val})
+        assert updated.accent_color == val
+
+
+@pytest.mark.parametrize("bad", ["fuchsia", "#ff0000", "", "Blue", 3, None])
+async def test_update_settings_rejects_unknown_accent_color(tmp_path, bad):
+    init_settings(settings_path=tmp_path / "s.json", options_path=tmp_path / "o.json")
+    with pytest.raises(SettingsValidationError) as exc:
+        await update_settings({"accent_color": bad})
+    assert exc.value.field == "accent_color"
+
+
+def test_accent_color_absent_from_older_settings_file_loads_default(tmp_path):
+    """Pre-#150 settings.json has no accent_color key — load must not fail."""
+    settings_file = tmp_path / "s.json"
+    settings_file.write_text(json.dumps({"font_size": "large", "server_token": "x" * 16}))
+    s = init_settings(settings_path=settings_file, options_path=tmp_path / "o.json")
+    assert s.accent_color == "indigo"
+    assert s.font_size == "large"
+
+
+def test_invalid_accent_color_on_disk_falls_back_to_default(tmp_path):
+    settings_file = tmp_path / "s.json"
+    settings_file.write_text(json.dumps({"accent_color": "neon", "server_token": "x" * 16}))
+    s = init_settings(settings_path=settings_file, options_path=tmp_path / "o.json")
+    assert s.accent_color == "indigo"
+
+
+# ---------------------------------------------------------------------------
 # #98 — versioning_enabled tristate + legacy bool migration
 # ---------------------------------------------------------------------------
 
@@ -618,6 +662,7 @@ def test_init_creates_settings_file_when_absent(tmp_path: Path):
         "date_format": "auto",
         "language": "auto",
         "font_size": "normal",
+        "accent_color": "indigo",
         "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
     }
     # Everything else matches the dataclass defaults.
@@ -893,6 +938,7 @@ def test_settings_as_dict_round_trips():
         "date_format": "auto",
         "language": "auto",
         "font_size": "normal",
+        "accent_color": "indigo",
         "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
     }
 

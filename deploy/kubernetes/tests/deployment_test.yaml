@@ -165,3 +165,54 @@ tests:
       - equal:
           path: spec.replicas
           value: 3
+
+  - it: renders no extra containers, init containers or volumes by default
+    set:
+      server.url: http://example:8765
+      server.token: tok
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 1
+
+  - it: renders initContainers, extraContainers, extraVolumes and extraVolumeMounts
+    set:
+      server.url: http://example:8765
+      server.token: tok
+      initContainers:
+        - name: init
+          image: busybox:1.36
+      extraContainers:
+        - name: sidecar
+          image: busybox:1.36
+      extraVolumes:
+        - name: scratch
+          emptyDir: {}
+      extraVolumeMounts:
+        - name: scratch
+          mountPath: /scratch
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: init
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: worker
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: sidecar
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: scratch
+            emptyDir: {}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: scratch
+            mountPath: /scratch

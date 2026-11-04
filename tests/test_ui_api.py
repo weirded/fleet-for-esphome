@@ -165,6 +165,34 @@ async def test_server_info_returns_version_and_token(tmp_path):
         await ta.close()
 
 
+async def test_esphome_versions_reports_latest_stable(tmp_path):
+    """#257: ``latest_stable`` = newest non-pre-release PyPI entry."""
+    ta = await _make_ui_app(tmp_path)
+    try:
+        ta.app["_rt"]["esphome_available_versions"] = [
+            "2026.11.0b2", "2026.10.3", "2026.10.2",
+        ]
+        resp = await ta.get("/ui/api/esphome-versions")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["latest_stable"] == "2026.10.3"
+        # Existing fields unchanged (additive).
+        assert data["available"][0] == "2026.11.0b2"
+    finally:
+        await ta.close()
+
+
+async def test_esphome_versions_latest_stable_none_without_pypi(tmp_path):
+    """#257: no PyPI data → None, never the selected-version fallback."""
+    ta = await _make_ui_app(tmp_path)
+    try:
+        resp = await ta.get("/ui/api/esphome-versions")
+        data = await resp.json()
+        assert data["latest_stable"] is None
+    finally:
+        await ta.close()
+
+
 # ---------------------------------------------------------------------------
 # targets
 # ---------------------------------------------------------------------------
@@ -1691,6 +1719,7 @@ async def test_get_settings_returns_defaults_on_fresh_boot(tmp_path, _settings_i
             "date_format": "auto",
             "language": "auto",
             "font_size": "normal",
+            "accent_color": "indigo",
             "default_worker_disk_quota_bytes": 10 * 1024 ** 3,
             "device_native_api_poll": False,
         }

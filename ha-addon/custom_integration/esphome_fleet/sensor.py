@@ -4,6 +4,7 @@ Device-scoped sensors, grouped by what user-facing question they answer:
 
 Global (hub device):
     QueueDepthSensor             — count of pending + working jobs.
+    LatestEsphomeVersionSensor   — newest stable ESPHome on PyPI (#257).
 
 Per managed target:
     TargetScheduleSensor         — human-readable recurring cron schedule
@@ -63,6 +64,7 @@ async def async_setup_entry(
         WorkerCountSensor(coordinator, eid, url),
         TotalSlotsSensor(coordinator, eid, url),
         SelectedEsphomeVersionSensor(coordinator, eid, url),
+        LatestEsphomeVersionSensor(coordinator, eid, url),
         FleetVersionSensor(coordinator, eid, url),
         TotalDevicesSensor(coordinator, eid, url),
         OnlineDevicesSensor(coordinator, eid, url),
@@ -215,6 +217,28 @@ class SelectedEsphomeVersionSensor(_HubSensorBase):
     def native_value(self) -> str | None:
         versions = (self.coordinator.data or {}).get("esphome_versions") or {}
         return versions.get("selected") or None
+
+
+class LatestEsphomeVersionSensor(_HubSensorBase):
+    """#257 — newest stable ESPHome release on PyPI, as known to the add-on.
+
+    The add-on refreshes the PyPI list hourly. State changes exactly when
+    a new ESPHome release ships, so a `state` trigger on this entity is
+    the "notify me about new ESPHome releases" automation. Not
+    DIAGNOSTIC: users trigger automations off it. `None` (unknown) while
+    PyPI hasn't been reached yet.
+    """
+
+    _attr_translation_key = "latest_esphome_version"
+    _attr_icon = "mdi:tag-arrow-up"
+
+    def __init__(self, coordinator: EsphomeFleetCoordinator, entry_id: str, base_url: str) -> None:
+        super().__init__(coordinator, entry_id, base_url, "latest_esphome_version")
+
+    @property
+    def native_value(self) -> str | None:
+        versions = (self.coordinator.data or {}).get("esphome_versions") or {}
+        return versions.get("latest_stable") or None
 
 
 class FleetVersionSensor(_HubSensorBase):

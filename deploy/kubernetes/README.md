@@ -91,6 +91,8 @@ See `values.yaml` for the full list. The most-touched fields:
 | `nodeSelector`, `tolerations`, `affinity` | `{}` / `[]` | Standard. |
 | `hostNetwork` | `false` | See Networking section. |
 | `terminationGracePeriodSeconds` | `600` | Mid-compile pods get 10 min before SIGKILL. |
+| `initContainers`, `extraContainers` | `[]` | Extra init / sidecar containers, rendered verbatim. |
+| `extraVolumes`, `extraVolumeMounts` | `[]` | Extra pod volumes / mounts on the worker container. Same shape as the server chart — see its README. |
 
 ## Uninstall
 
