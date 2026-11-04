@@ -6,7 +6,8 @@ Roadmap and bug tracking for Fleet for ESPHome, organized by release.
 
 Each WORKITEMS file's first paragraph is the authoritative theme — read the file, not this index.
 
-- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — **Current release.** ESPHome dashboard parity.
+- **[WORKITEMS-1.8.1.md](WORKITEMS-1.8.1.md)** — **Next release (patch).** Git-packages secrets fix + README refresh vs. the ESPHome Device Builder.
+- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — Following release. ESPHome dashboard parity.
 - **[WORKITEMS-future.md](WORKITEMS-future.md)** — Unscheduled backlog.
 - **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Security audit findings.
 - **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — Release process.
