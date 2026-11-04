@@ -101,17 +101,20 @@ header img {
    values step one weight darker so white text on accent buttons keeps
    its contrast on the white surface. Indigo is the pre-#150 accent and
    is listed explicitly so its swatch previews correctly while another
-   preset is active. --primary / --ring follow --accent via :root.
+   preset is active. --primary / --ring follow --accent via :root, except
+   where a dark-theme accent is too light for white button text (<4.5:1):
+   those presets pin --primary to the darker light-theme shade so button
+   labels stay readable while accent-coloured text keeps the brighter one.
    Keep ids in sync with ACCENT_COLORS in ha-addon/server/settings.py
    and src/lib/accent.ts. */
 [data-accent="indigo"] { --accent: #6366f1; --accent-hover: #4f52d4; }
-[data-accent="blue"] { --accent: #3b82f6; --accent-hover: #2563eb; }
-[data-accent="teal"] { --accent: #0d9488; --accent-hover: #0f766e; }
-[data-accent="green"] { --accent: #16a34a; --accent-hover: #15803d; }
-[data-accent="amber"] { --accent: #d97706; --accent-hover: #b45309; }
-[data-accent="orange"] { --accent: #ea580c; --accent-hover: #c2410c; }
+[data-accent="blue"] { --accent: #3b82f6; --accent-hover: #2563eb; --primary: #2563eb; }
+[data-accent="teal"] { --accent: #0d9488; --accent-hover: #0f766e; --primary: #0f766e; }
+[data-accent="green"] { --accent: #16a34a; --accent-hover: #15803d; --primary: #15803d; }
+[data-accent="amber"] { --accent: #d97706; --accent-hover: #b45309; --primary: #b45309; }
+[data-accent="orange"] { --accent: #ea580c; --accent-hover: #c2410c; --primary: #c2410c; }
 [data-accent="rose"] { --accent: #e11d48; --accent-hover: #be123c; }
-[data-accent="violet"] { --accent: #8b5cf6; --accent-hover: #7c3aed; }
+[data-accent="violet"] { --accent: #8b5cf6; --accent-hover: #7c3aed; --primary: #7c3aed; }
 [data-theme="light"][data-accent="indigo"],
 [data-theme="light"] [data-accent="indigo"] { --accent: #6366f1; --accent-hover: #4f52d4; }
 [data-theme="light"][data-accent="blue"],

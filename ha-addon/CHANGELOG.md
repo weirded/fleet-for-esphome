@@ -10,13 +10,13 @@ Thread and Matter devices can finally be flashed from any build worker, workers 
 
 **Workers that can't reach a device no longer fail the job.** If a build worker can compile but can't reach a device (a separate VLAN, a firewall, a cloud worker with no route home), it now checks before uploading, finishes the compile, and hands the firmware to the add-on to flash. Same mechanism as Thread devices. Set `OTA_REACHABILITY_CHECK=0` on a worker to turn it off.
 
-**Watch an upgrade from start to finish without clicking around.** Upgrading a single device now opens its build log straight away (with a "waiting for a worker" note while it's queued), and once the new firmware is flashed successfully it switches to that device's live logs so you can watch it boot. Bulk upgrades still just take you to the Queue tab, and nothing pops up for failed builds or download-only compiles.
+**Watch an upgrade from start to finish without clicking around.** Upgrading a single device now opens its build log straight away (with a "waiting for a worker" note while it's queued), and once the new firmware is flashed successfully it switches to that device's live logs so you can watch it boot, reconnecting for up to a minute and a half while the device restarts. Bulk upgrades still just take you to the Queue tab, and nothing pops up for failed builds or download-only compiles.
 
 **Get notified when a new ESPHome release comes out.** The Home Assistant integration adds two entities to the Fleet hub device: **Latest ESPHome version** and **ESPHome update available**, which turns on while a stable release newer than the one Fleet compiles with is out (betas are ignored). The docs include a ready-to-copy automation that sends you a notification when it flips.
 
 **Workers stay in the list until you delete them.** Previously a build worker vanished from the Workers tab the moment it shut down cleanly, and every worker disappeared whenever the add-on restarted — so a worker you'd tagged and configured could silently drop out of view, and a worker that came back after a wipe showed up as a second, duplicate row. Now the worker list is saved to disk and survives restarts, a stopped worker simply shows as offline with how long it's been gone, and a worker returning without its saved identity takes over its old row instead of creating a new one. The per-row Actions menu gains a **Delete** item, which is the only way a worker leaves the list; it's disabled with an explanation while the worker is online (a running worker would just re-register) and for the built-in worker. Remote workers pick up the matching client-side change through the usual automatic source update.
 
-**Pick an accent colour.** Settings → Display has a new Accent colour row with eight presets. Indigo stays the default, and each colour is tuned to stay readable in both light and dark mode.
+**Pick an accent colour.** Settings → Display has a new Accent colour row with eight presets. Indigo stays the default, and each colour is tuned so both coloured text and button labels stay readable in light and dark mode.
 
 **Config history diffs are easier to read.** The history drawer's diff view now marks every change in the scrollbar and folds away unchanged sections, GitHub-style, so a one-line edit in a long config is easy to spot.
 
@@ -32,7 +32,7 @@ Thread and Matter devices can finally be flashed from any build worker, workers 
 
 **Entities going "unavailable" after every Home Assistant restart.** Per-device and per-worker entities from the Fleet integration showed "This entity is no longer being provided" after each restart or integration reload. They now come back every time.
 
-**Changing a device's static IP in its YAML now updates the address Fleet shows and uses.** Previously the Devices tab kept the first address it ever saw, and mDNS could overwrite a pinned static IP.
+**Changing a device's static IP in its YAML now updates the address Fleet shows and uses** within about 30 seconds of saving. Previously the Devices tab kept the first address it ever saw, and mDNS could overwrite a pinned static IP.
 
 **"ESPHome install failed" after an add-on update that changed the Python version.** The cached ESPHome install is now rebuilt automatically instead of staying broken.
 

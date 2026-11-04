@@ -10,7 +10,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, Any, Optional
 
 import aiohttp
 from aiohttp import web
@@ -801,25 +801,69 @@ async def config_scanner(app: web.Application) -> None:
     """
     from scanner import scan_configs, build_name_to_target_map  # noqa: PLC0415
 
-    cfg: AppConfig = app["config"]
-    device_poller = app.get("device_poller")
-    prev_targets: list[str] = []
-    loop = asyncio.get_running_loop()
-
+    state: dict[str, Any] = {}
     while True:
         await asyncio.sleep(30)
         try:
-            targets = await loop.run_in_executor(None, scan_configs, cfg.config_dir)
-            if targets != prev_targets:
-                logger.info("Config change detected: %d targets (was %d)", len(targets), len(prev_targets))
-                if device_poller:
-                    name_map, enc_keys, addr_overrides, addr_sources = await loop.run_in_executor(
-                        None, build_name_to_target_map, cfg.config_dir, targets,
-                    )
-                    device_poller.update_compile_targets(targets, name_map, enc_keys, addr_overrides, addr_sources)
-                prev_targets = targets
+            await _config_scan_once(app, state, scan_configs, build_name_to_target_map)
         except Exception:
             logger.exception("Error in config scanner")
+
+
+def _config_signature(config_dir: str) -> tuple[tuple[str, int, int], ...]:
+    """Cheap change detector for the YAML tree: (relpath, mtime_ns, size).
+
+    Covers targets *and* the files they pull in (secrets, includes,
+    packages), so a content-only edit — e.g. a new ``manual_ip`` — is seen
+    without re-running full validation every 30 s. Skips ESPHome's build
+    dirs and the archive.
+    """
+    out: list[tuple[str, int, int]] = []
+    for root, dirs, files in os.walk(config_dir):
+        dirs[:] = [d for d in dirs if d not in (".esphome", ".archive", ".git")]
+        for name in files:
+            if not name.endswith((".yaml", ".yml")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            out.append((os.path.relpath(path, config_dir), st.st_mtime_ns, st.st_size))
+    return tuple(sorted(out))
+
+
+async def _config_scan_once(
+    app: web.Application,
+    state: dict[str, Any],
+    scan_configs: Any,
+    build_name_to_target_map: Any,
+) -> None:
+    """One config-scanner pass: reseed the poller when targets or YAML content change.
+
+    Comparing target names alone missed content-only edits, so a device's
+    edited static IP never reached ``update_compile_targets`` until a
+    restart (#171 follow-up).
+    """
+    cfg: AppConfig = app["config"]
+    device_poller = app.get("device_poller")
+    loop = asyncio.get_running_loop()
+    targets = await loop.run_in_executor(None, scan_configs, cfg.config_dir)
+    signature = await loop.run_in_executor(None, _config_signature, cfg.config_dir)
+    prev_targets = state.get("targets", [])
+    if targets == prev_targets and signature == state.get("signature"):
+        return
+    if targets != prev_targets:
+        logger.info("Config change detected: %d targets (was %d)", len(targets), len(prev_targets))
+    else:
+        logger.info("Config content changed — reseeding device poller")
+    if device_poller:
+        name_map, enc_keys, addr_overrides, addr_sources = await loop.run_in_executor(
+            None, build_name_to_target_map, cfg.config_dir, targets,
+        )
+        device_poller.update_compile_targets(targets, name_map, enc_keys, addr_overrides, addr_sources)
+    state["targets"] = targets
+    state["signature"] = signature
 
 
 async def _legacy_schedule_checker_removed() -> None:

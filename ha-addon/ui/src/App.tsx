@@ -345,6 +345,9 @@ export default function App() {
   // xterm + WS transport).
   const [logWorkerId, setLogWorkerId] = useState<string | null>(null);
   const [deviceLogTarget, setDeviceLogTarget] = useState<string | null>(null);
+  // #137: true only for the post-OTA handover, so the live-log view keeps
+  // reconnecting while the freshly flashed device reboots.
+  const [deviceLogAwaitBoot, setDeviceLogAwaitBoot] = useState(false);
   const [editorTarget, setEditorTarget] = useState<string | null>(null);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [connectModalPreset, setConnectModalPreset] = useState<import('./types').WorkerPreset | null>(null);
@@ -557,6 +560,7 @@ export default function App() {
     ) {
       logWatchRef.current = null;
       setLogJobId(null);
+      setDeviceLogAwaitBoot(true);
       setDeviceLogTarget(job.target);
     }
   }, [logJobId, queue, editorTarget]);
@@ -1120,7 +1124,8 @@ export default function App() {
       {deviceLogTarget && (
         <DeviceLogModal
           target={deviceLogTarget}
-          onClose={() => setDeviceLogTarget(null)}
+          awaitBoot={deviceLogAwaitBoot}
+          onClose={() => { setDeviceLogTarget(null); setDeviceLogAwaitBoot(false); }}
         />
       )}
 
