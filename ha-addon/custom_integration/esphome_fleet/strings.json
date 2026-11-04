@@ -109,5 +109,89 @@
     "tags_match_multiple": {
       "message": "The tag expression matches {count} devices ({matches}); validate accepts a single target. Use compile for a fleet-wide run."
     }
+  },
+  "entity": {
+    "binary_sensor": {
+      "esphome_update_available": {
+        "name": "ESPHome update available"
+      },
+      "online": {
+        "name": "Online"
+      },
+      "working": {
+        "name": "Working"
+      }
+    },
+    "button": {
+      "clean_build_cache": {
+        "name": "Clean build cache"
+      }
+    },
+    "number": {
+      "build_slots": {
+        "name": "Build slots"
+      }
+    },
+    "sensor": {
+      "active_jobs": {
+        "name": "Active jobs"
+      },
+      "cpu_cores": {
+        "name": "CPU cores"
+      },
+      "cpu_usage": {
+        "name": "CPU usage"
+      },
+      "disk_free": {
+        "name": "Disk free"
+      },
+      "disk_usage": {
+        "name": "Disk usage"
+      },
+      "fleet_version": {
+        "name": "Fleet version"
+      },
+      "latest_esphome_version": {
+        "name": "Latest ESPHome version"
+      },
+      "memory": {
+        "name": "Memory"
+      },
+      "online_devices": {
+        "name": "Online devices"
+      },
+      "outdated_devices": {
+        "name": "Outdated devices"
+      },
+      "pinned_esphome_version": {
+        "name": "Pinned ESPHome version"
+      },
+      "queue_depth": {
+        "name": "Queue depth"
+      },
+      "scheduled_one_time_upgrade": {
+        "name": "Scheduled one-time upgrade"
+      },
+      "selected_esphome_version": {
+        "name": "Selected ESPHome version"
+      },
+      "total_build_slots": {
+        "name": "Total build slots"
+      },
+      "total_devices": {
+        "name": "Total devices"
+      },
+      "upgrade_schedule": {
+        "name": "Upgrade schedule"
+      },
+      "workers": {
+        "name": "Workers"
+      }
+    },
+    "update": {
+      "firmware": {
+        "name": "Firmware"
+      }
+    }
   }
 }

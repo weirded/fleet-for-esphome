@@ -59,7 +59,7 @@ class WorkerCleanCacheButton(
     CoordinatorEntity[EsphomeFleetCoordinator], ButtonEntity
 ):
     _attr_has_entity_name = True
-    _attr_name = "Clean build cache"
+    _attr_translation_key = "clean_build_cache"
     _attr_icon = "mdi:broom"
     _attr_entity_category = EntityCategory.CONFIG
 

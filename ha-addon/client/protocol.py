@@ -79,6 +79,15 @@ class SystemInfo(_ProtocolMessage):
     disk_total: Optional[str] = None
     disk_free: Optional[str] = None
     disk_used_pct: Optional[int] = None
+    # Raw free-space byte count backing disk_free/disk_used_pct. Needed
+    # because a percentage alone is meaningless without knowing the disk's
+    # absolute scale — see registry.Worker.evaluate_health's absolute-floor
+    # check (bug: a many-TB worker volume at >=95% used still has huge
+    # absolute headroom, but a pure-percentage gate falsely blocks it).
+    # Optional/additive: an older worker that hasn't upgraded simply omits
+    # it, and evaluate_health falls back to pure percentage-based blocking
+    # (pre-fix behavior).
+    disk_free_bytes: Optional[int] = None
     # DQ.6: worker's view of the disk-quota engine's most recent state.
     # ``disk_usage_bytes`` is the engine's measured byte total under
     # ``/esphome-versions/`` (venvs + caches + slots + pio-slots).
@@ -203,6 +212,11 @@ class JobAssignment(_ProtocolMessage):
     # the server via /api/v1/jobs/{id}/firmware. The user downloads it
     # later from the Queue tab.
     download_only: bool = False
+    # SOTA.1: when true the worker compiles (like download_only) and uploads
+    # the binary; the server then performs OTA push via `esphome upload`.
+    # Used for Thread/Matter devices only reachable from the HA host.
+    # Optional + False default keeps older workers forward-compatible.
+    server_ota: bool = False
     ota_address: Optional[str] = None
     server_timezone: Optional[str] = None
 
@@ -211,6 +225,12 @@ class JobResultSubmission(_ProtocolMessage):
     status: Literal["success", "failed"]
     log: Optional[str] = None
     ota_result: Optional[str] = None
+    # SOTA.5: worker→server signal that it compiled but determined at runtime
+    # it can't reach the device itself (pre-flight TCP probe against the OTA
+    # port failed) — ask the server to perform the OTA push centrally, the
+    # same mechanism used for server_ota=True Thread/Matter jobs. Optional +
+    # False default keeps older workers forward-compatible.
+    requires_server_ota: bool = False
 
 
 class JobStatusUpdate(_ProtocolMessage):

@@ -156,6 +156,7 @@ def _job_to_row(job: "Job") -> dict[str, object]:
         "trigger_detail": trigger_detail,
         "download_only": 1 if getattr(job, "download_only", False) else 0,
         "validate_only": 1 if getattr(job, "validate_only", False) else 0,
+        "server_ota": 1 if getattr(job, "server_ota", False) else 0,
         "pinned_client_id": getattr(job, "pinned_client_id", None),
         "esphome_version": getattr(job, "esphome_version", None),
         "assigned_client_id": getattr(job, "assigned_client_id", None),
@@ -201,6 +202,7 @@ class JobHistoryDAO:
             trigger_detail TEXT,
             download_only INTEGER NOT NULL DEFAULT 0,
             validate_only INTEGER NOT NULL DEFAULT 0,
+            server_ota INTEGER NOT NULL DEFAULT 0,
             pinned_client_id TEXT,
             esphome_version TEXT,
             assigned_client_id TEXT,
@@ -284,6 +286,14 @@ class JobHistoryDAO:
                     except sqlite3.OperationalError as exc:
                         if "duplicate column" not in str(exc).lower():
                             raise
+                    # SOTA.1: server_ota migration.
+                    try:
+                        conn.execute(
+                            "ALTER TABLE jobs ADD COLUMN server_ota INTEGER NOT NULL DEFAULT 0"
+                        )
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column" not in str(exc).lower():
+                            raise
                     conn.commit()
                 self._initialized = True
                 logger.debug("Job-history DB ready at %s", self._db_path)
@@ -330,14 +340,14 @@ class JobHistoryDAO:
                 """
                 INSERT INTO jobs(
                     id, target, state, triggered_by, trigger_detail,
-                    download_only, validate_only, pinned_client_id,
+                    download_only, validate_only, server_ota, pinned_client_id,
                     esphome_version, assigned_client_id, assigned_hostname,
                     submitted_at, started_at, finished_at, duration_seconds,
                     ota_result, config_hash, retry_count, log_excerpt,
                     has_firmware, selection_reason
                 ) VALUES (
                     :id, :target, :state, :triggered_by, :trigger_detail,
-                    :download_only, :validate_only, :pinned_client_id,
+                    :download_only, :validate_only, :server_ota, :pinned_client_id,
                     :esphome_version, :assigned_client_id, :assigned_hostname,
                     :submitted_at, :started_at, :finished_at, :duration_seconds,
                     :ota_result, :config_hash, :retry_count, :log_excerpt,

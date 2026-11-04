@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Optional
@@ -68,3 +70,34 @@ def constant_time_compare(a: str, b: str) -> bool:
 def clamp(value: int, min_val: int, max_val: int) -> int:
     """Clamp an integer to a range."""
     return max(min_val, min(max_val, value))
+
+
+# A DNS label: alphanumeric, inner hyphens allowed, 1-63 chars. A hostname
+# is one or more of those joined by dots, with an optional trailing root dot.
+_HOSTNAME_LABEL_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def is_valid_ota_address(address: str) -> bool:
+    """True if *address* is a literal IP or a syntactically valid hostname.
+
+    OTA addresses reach ``esphome upload --device <addr>`` and the
+    server-side pre-flight ``ping`` as argv entries. Neither runs through a
+    shell, so there is no command-injection surface -- but both parse
+    leading-dash arguments as *flags*, so an address like ``-f`` or
+    ``--help`` is interpreted rather than dialled. Everything the product
+    legitimately produces here is either a literal address resolved by
+    device_poller or a hostname the user typed, so require exactly that and
+    reject the rest at the boundary.
+    """
+    if not address or len(address) > 253:
+        return False
+    try:
+        ipaddress.ip_address(address)
+        return True
+    except ValueError:
+        pass
+    # Not a literal IP — accept a plain hostname/FQDN (e.g. "device.local").
+    hostname = address[:-1] if address.endswith(".") else address
+    if not hostname:
+        return False
+    return all(_HOSTNAME_LABEL_RE.match(label) for label in hostname.split("."))

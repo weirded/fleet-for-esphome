@@ -333,6 +333,98 @@ async def test_fire_once_resolves_ota_address_without_ip(tmp_path):
     assert enqueue_kwargs["ota_address"] == "no-ip-once.local"
 
 
+async def test_fire_recurring_auto_detects_thread_target_as_server_ota(tmp_path):
+    """SOTA.3: a scheduled recurring fire for a Thread target must enqueue
+    with server_ota=True — mirrors the same auto-detection start_compile
+    does, so scheduled Thread compiles don't silently try worker-side OTA."""
+    import scheduler
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _write_scheduled_device(tmp_path, name="thread-device")
+    target = "thread-device.yaml"
+
+    fake_queue = MagicMock()
+    fake_queue.enqueue = AsyncMock(return_value=None)
+
+    app = {
+        "config": type("C", (), {"config_dir": str(tmp_path), "job_timeout": 600})(),
+        "queue": fake_queue,
+        "device_poller": None,
+    }
+    scheduler._app = app
+
+    with patch("scanner.get_esphome_version", return_value="2024.1.0"), \
+         patch("git_versioning.get_head", return_value="abc123"), \
+         patch("scanner.read_device_meta", return_value={}), \
+         patch("scanner.write_device_meta"), \
+         patch("scanner.get_device_metadata", return_value={"network_type": "thread"}), \
+         patch("scheduler._job_timeout", return_value=600):
+        await scheduler._fire_recurring(target)
+
+    enqueue_kwargs = fake_queue.enqueue.call_args.kwargs
+    assert enqueue_kwargs["server_ota"] is True
+
+
+async def test_fire_recurring_non_thread_target_not_auto_server_ota(tmp_path):
+    import scheduler
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _write_scheduled_device(tmp_path, name="wifi-device")
+    target = "wifi-device.yaml"
+
+    fake_queue = MagicMock()
+    fake_queue.enqueue = AsyncMock(return_value=None)
+
+    app = {
+        "config": type("C", (), {"config_dir": str(tmp_path), "job_timeout": 600})(),
+        "queue": fake_queue,
+        "device_poller": None,
+    }
+    scheduler._app = app
+
+    with patch("scanner.get_esphome_version", return_value="2024.1.0"), \
+         patch("git_versioning.get_head", return_value="abc123"), \
+         patch("scanner.read_device_meta", return_value={}), \
+         patch("scanner.write_device_meta"), \
+         patch("scanner.get_device_metadata", return_value={"network_type": "wifi"}), \
+         patch("scheduler._job_timeout", return_value=600):
+        await scheduler._fire_recurring(target)
+
+    enqueue_kwargs = fake_queue.enqueue.call_args.kwargs
+    assert enqueue_kwargs["server_ota"] is False
+
+
+async def test_fire_once_auto_detects_thread_target_as_server_ota(tmp_path):
+    """SOTA.3: the one-time-schedule fire path gets the same auto-detection
+    as _fire_recurring and start_compile."""
+    import scheduler
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    _write_scheduled_device(tmp_path, name="thread-once")
+    target = "thread-once.yaml"
+
+    fake_queue = MagicMock()
+    fake_queue.enqueue = AsyncMock(return_value=None)
+
+    app = {
+        "config": type("C", (), {"config_dir": str(tmp_path), "job_timeout": 600})(),
+        "queue": fake_queue,
+        "device_poller": None,
+    }
+    scheduler._app = app
+
+    with patch("scanner.get_esphome_version", return_value="2024.1.0"), \
+         patch("git_versioning.get_head", return_value="abc123"), \
+         patch("scanner.read_device_meta", return_value={}), \
+         patch("scanner.write_device_meta"), \
+         patch("scanner.get_device_metadata", return_value={"network_type": "thread"}), \
+         patch("scheduler._job_timeout", return_value=600):
+        await scheduler._fire_once(target)
+
+    enqueue_kwargs = fake_queue.enqueue.call_args.kwargs
+    assert enqueue_kwargs["server_ota"] is True
+
+
 async def test_schedule_history_ring_buffer_caps(tmp_path, tmp_queue):
     """History ring buffer should not exceed _MAX_PER_TARGET entries."""
     import schedule_history

@@ -46,7 +46,7 @@ from sysinfo import collect_system_info
 # can detect the mismatch and self-update.
 # ---------------------------------------------------------------------------
 
-CLIENT_VERSION = "1.7.3"
+CLIENT_VERSION = "1.8.0"
 
 
 def _read_image_version() -> Optional[str]:
@@ -124,6 +124,18 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "1"))
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "10"))
 JOB_TIMEOUT = int(os.environ.get("JOB_TIMEOUT", "600"))
 OTA_TIMEOUT = int(os.environ.get("OTA_TIMEOUT", "120"))
+# SOTA.5: gates two related fallbacks to server-side OTA for a normal
+# (non-Thread) job — a pre-flight TCP reachability probe against the
+# device's OTA port run before `esphome run` even starts, and a
+# last-resort fallback if the probe passed but the actual local OTA
+# attempt still failed after its existing retry (e.g. a marginal/flaky
+# WiFi link where the TCP handshake succeeds but the OTA protocol
+# exchange itself times out — a bare TCP probe can't catch that). Either
+# way, the worker compiles and hands the OTA push to the server instead
+# of just failing the job. Escape hatch for operators whose network
+# makes the probe/fallback unreliable or undesired.
+OTA_REACHABILITY_CHECK = os.environ.get("OTA_REACHABILITY_CHECK", "1").strip().lower() not in ("0", "false", "no")
+OTA_REACHABILITY_TIMEOUT_SECONDS = 5
 MAX_ESPHOME_VERSIONS = int(os.environ.get("MAX_ESPHOME_VERSIONS", "3"))
 MAX_PARALLEL_JOBS = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
 HOSTNAME = os.environ.get("HOSTNAME", socket.gethostname())
@@ -435,17 +447,13 @@ def _save_client_id(client_id: str) -> None:
         logger.debug("Could not persist client_id: %s", exc)
 
 
-def _clear_client_id() -> None:
-    """Remove persisted client_id (on clean deregister)."""
-    try:
-        if os.path.exists(_CLIENT_ID_FILE):
-            os.remove(_CLIENT_ID_FILE)
-    except OSError:
-        logger.debug("Could not remove client_id file: %s", _CLIENT_ID_FILE, exc_info=True)
-
-
 def deregister(client_id: str) -> None:
-    """Tell the server to remove this worker (best-effort on shutdown)."""
+    """Tell the server we're stopping (best-effort on shutdown).
+
+    The server keeps the worker's row and just marks it offline; the
+    persisted client_id is kept too, so the next start re-attaches to the
+    same row instead of leaving a stale duplicate in the Workers list.
+    """
     try:
         resp = post(
             "/api/v1/workers/deregister",
@@ -453,7 +461,6 @@ def deregister(client_id: str) -> None:
         )
         if resp.ok:
             logger.info("Deregistered worker %s", client_id)
-            _clear_client_id()
         else:
             logger.debug("Deregister returned %s", resp.status_code)
     except Exception as exc:
@@ -780,9 +787,73 @@ def _idf_warm_marker(esphome_version: str) -> str:
     return os.path.join(_idf_cache_root(), f".fleet-warm-{esphome_version}")
 
 
-def _idf_is_warm(esphome_version: str) -> bool:
-    """True when some earlier compile already populated the IDF cache for
-    this ESPHome version, so a cold-install race is no longer possible."""
+# #249: memo of esphome binary path → the ESP-IDF version that ESPHome
+# release installs by default (``None`` when it couldn't be determined).
+_REQUIRED_IDF_VERSIONS: dict[str, str | None] = {}
+
+_IDF_VERSION_QUERY = (
+    "from esphome.components.esp32 import ESP_IDF_FRAMEWORK_VERSION_LOOKUP as L; "
+    "print(L['recommended'])"
+)
+
+
+def _required_idf_version(esphome_bin: str) -> str | None:
+    """#249: the ESP-IDF version *esphome_bin*'s release installs by default.
+
+    Asked of the ESPHome venv itself (its own interpreter sits next to
+    ``bin/esphome``) rather than parsed from source, so it tracks however
+    ESPHome lays the lookup out. Memoised per binary — ~2s the first time.
+    Both default framework paths resolve to it: ESP32 Arduino builds as an
+    IDF component on the same recommended IDF.
+
+    Returns ``None`` when the query fails (custom ``ESPHOME_BIN``, a layout
+    change upstream); callers fall back to the per-version warm marker.
+    """
+    if esphome_bin in _REQUIRED_IDF_VERSIONS:
+        return _REQUIRED_IDF_VERSIONS[esphome_bin]
+    python = os.path.join(os.path.dirname(esphome_bin), "python")
+    cmd = [python, "-c", _IDF_VERSION_QUERY]
+    logger.info("[#249] querying required ESP-IDF version: %s", cmd)
+    version: str | None = None
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=False)
+        out = proc.stdout.strip()
+        if proc.returncode == 0 and re.fullmatch(r"\d+\.\d+\.\d+", out):
+            version = out
+        else:
+            logger.info(
+                "[#249] could not determine required ESP-IDF version (rc=%s, out=%r, err=%r)",
+                proc.returncode, out[-200:], proc.stderr.strip()[-200:],
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.info("[#249] required ESP-IDF version query failed: %s", exc)
+    _REQUIRED_IDF_VERSIONS[esphome_bin] = version
+    return version
+
+
+def _idf_version_installed(idf_version: str) -> bool:
+    """#249: True when *idf_version*'s framework (with ``tools/``) and its
+    Python env are both present in the IDF cache."""
+    root = _idf_cache_root()
+    return os.path.isdir(os.path.join(root, "frameworks", idf_version, "tools")) and os.path.isdir(
+        os.path.join(root, "penvs", idf_version)
+    )
+
+
+def _idf_is_warm(esphome_version: str, esphome_bin: str | None = None) -> bool:
+    """True when the IDF cache already holds what this ESPHome version
+    needs, so a cold-install race is no longer possible.
+
+    #249: when the required IDF version is known, check for *that*
+    framework. The per-ESPHome-version marker alone is not enough: an
+    ESP8266 build (which never touches IDF) or a leftover framework from
+    the previous release satisfied it, so ESPHome 2026.10.0's first ESP32
+    builds took shared locks and raced the new IDF 5.5.6 download.
+    """
+    if esphome_bin:
+        idf_version = _required_idf_version(esphome_bin)
+        if idf_version:
+            return _idf_version_installed(idf_version)
     return os.path.isfile(_idf_warm_marker(esphome_version))
 
 
@@ -1461,6 +1532,101 @@ def _apply_update(current_client_id: str) -> None:
         logger.warning("Worker update failed: %s", exc)
 
 
+def _detect_ota_ports(target_path: str) -> list[int]:
+    """Best-effort OTA port(s) to probe for ``target_path``.
+
+    Honors an explicit ``port:`` override scoped to the ``ota:`` block
+    specifically: lines more indented than the top-level ``ota:`` key,
+    up to the next top-level key or EOF. Bug fix: the previous
+    implementation grabbed the first ``port:`` key appearing *anywhere*
+    in the file after the literal substring "ota:" — which could match
+    an unrelated component (e.g. a ``web_server: port: 80`` block
+    declared later in the file) and silently probe the wrong port.
+    Falls back to both common ESPHome OTA ports (ESP32 3232, ESP8266
+    8266) when no ``ota:`` block or port override is found. Shared by
+    ``_ota_network_diagnostics`` (post-failure) and
+    ``_check_ota_reachable`` (SOTA.5 pre-flight probe).
+    """
+    # ALLOW_REGEX_YAML (PY-1): deliberately not a real YAML parse.
+    # PyYAML isn't a guaranteed client-side dependency — some worker
+    # images don't have it, and this runs inline in the job-execution
+    # path where an ImportError would abandon the job mid-flight
+    # rather than degrade gracefully (that happened: #248 hotfix).
+    # But this isn't just an availability problem: `!secret` is
+    # ubiquitous in real `ota:`-adjacent config, and `yaml.safe_load`
+    # has no constructor for it — it would raise even on a worker where
+    # PyYAML *is* installed. So don't "fix" this by reaching for
+    # `try: import yaml / except ImportError` — that still breaks on
+    # any config using `!secret`. Also needs zero YAML semantics here
+    # (no !secret/!lambda resolution, no type coercion) — just "which
+    # lines belong to the ota: block" — so a line-based indentation
+    # scan is both simpler and more robust than a parse would be for
+    # this specific use.
+
+    try:
+        with open(target_path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except Exception:
+        logger.debug("Could not read YAML for OTA port detection: %s", target_path, exc_info=True)
+        return [3232, 8266]
+
+    ota_block_lines: list[str] = []
+    in_ota_block = False
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            # Top-level key — enter the block only for an exact `ota:` match
+            # (avoids `otavar:` or similar false positives).
+            in_ota_block = bool(re.match(r"^ota\s*:", line))
+            continue
+        if in_ota_block:
+            ota_block_lines.append(line)
+
+    # Every port in the block, not just the first. ESPHome 2024.6+ made
+    # ``ota:`` a *list of platforms*, so a config can legitimately declare
+    # more than one — e.g. a ``web_server`` OTA platform on 8080 alongside
+    # the ``esphome`` platform on 3232. Taking the first match returns
+    # whichever platform happens to be written first, which is the same
+    # "first port: wins" failure this function was rewritten to fix, just
+    # scoped to inside the block instead of the whole file. Probing every
+    # declared port costs nothing: the caller loops them and short-circuits
+    # on the first that answers.
+    #
+    # dict.fromkeys rather than set() so the declared order is preserved —
+    # the first-declared port is tried first, and the probe timeout is
+    # per-port.
+    ports = [int(p) for p in re.findall(r"port:\s*(\d+)", "".join(ota_block_lines))]
+    if ports:
+        return list(dict.fromkeys(ports))
+    return [3232, 8266]
+
+
+def _check_ota_reachable(
+    device_addr: str, target_path: str, timeout: float = OTA_REACHABILITY_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
+    """SOTA.5 pre-flight probe: can *this worker* reach the device's OTA port?
+
+    Tries a plain TCP connect against every port ``_detect_ota_ports``
+    returns for ``target_path``, short-circuiting on the first success.
+    Returns ``(reachable, log_line)`` — the log line is always meaningful
+    (describes what was tried) so it can be flushed into the job log
+    regardless of outcome.
+    """
+    ports = _detect_ota_ports(target_path)
+    for port in ports:
+        try:
+            with socket.create_connection((device_addr, port), timeout=timeout):
+                return True, f"Connectivity check: {device_addr}:{port} reachable from this worker.\n"
+        except OSError:
+            continue
+    port_list = ", ".join(str(p) for p in ports)
+    return False, (
+        f"Connectivity check: {device_addr} not reachable on port(s) {port_list} from this "
+        "worker — falling back to server-side OTA.\n"
+    )
+
+
 def _ota_network_diagnostics(target_path: str, cwd: str, env: dict) -> str:
     """Run network diagnostics after an OTA failure.
 
@@ -1478,7 +1644,6 @@ def _ota_network_diagnostics(target_path: str, cwd: str, env: dict) -> str:
     #   2. wifi.manual_ip.static_ip
     #   3. DNS resolution of device name
     device_addr = None
-    ota_port = None
     try:
         with open(target_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -1492,12 +1657,8 @@ def _ota_network_diagnostics(target_path: str, cwd: str, env: dict) -> str:
             ip_match = _re.search(r"static_ip:\s*['\"]?(\d+\.\d+\.\d+\.\d+)", content)
             if ip_match:
                 device_addr = ip_match.group(1)
-        # Check for OTA port override
-        port_match = _re.search(r"port:\s*(\d+)", content.split("ota:")[1] if "ota:" in content else "")
-        if port_match:
-            ota_port = int(port_match.group(1))
     except Exception:
-        logger.debug("Could not parse device address/port from YAML %s", target_path, exc_info=True)
+        logger.debug("Could not parse device address from YAML %s", target_path, exc_info=True)
 
     # Extract device name from the esphome: block (not any other component's name: key).
     # Parse with yaml.safe_load to avoid the regex pitfall of matching the wrong name:.
@@ -1563,12 +1724,10 @@ def _ota_network_diagnostics(target_path: str, cwd: str, env: dict) -> str:
         lines.append("Could not determine device IP for diagnostics")
         return "\n".join(lines)
 
-    # Determine OTA port: ESP8266 uses 8266, ESP32 uses 3232
-    if not ota_port:
-        # Check both common ports
-        ports_to_check = [3232, 8266]
-    else:
-        ports_to_check = [ota_port]
+    # Determine OTA port(s): explicit ``ota: port:`` override, else both
+    # common ESPHome ports (ESP8266 8266, ESP32 3232). Shared with the
+    # SOTA.5 pre-flight probe via _detect_ota_ports.
+    ports_to_check = _detect_ota_ports(target_path)
 
     lines.append(f"Device IP: {device_addr}")
 
@@ -1766,11 +1925,16 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
     ota_only = job.get("ota_only", False)
     validate_only = job.get("validate_only", False)
     download_only = job.get("download_only", False)
+    # SOTA.1: server performs OTA — worker compiles and uploads binary only.
+    # Reuses the download_only path exactly; server handles the actual flash.
+    server_ota = job.get("server_ota", False)
+    if server_ota:
+        download_only = True
 
     _log_context.current_target = target
     logger.info(
-        "Starting job %s: target=%s esphome=%s ota_only=%s validate_only=%s download_only=%s",
-        job_id, target, esphome_version, ota_only, validate_only, download_only,
+        "Starting job %s: target=%s esphome=%s ota_only=%s validate_only=%s download_only=%s server_ota=%s",
+        job_id, target, esphome_version, ota_only, validate_only, download_only, server_ota,
     )
 
     # Per-slot PlatformIO core directory — prevents cross-slot package conflicts
@@ -1862,6 +2026,39 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
             _submit_result(job_id, "failed", log=f"Target file not found in bundle: {target}", ota_result=None)
             return
 
+        # Resolved once, used by both the SOTA.5 reachability pre-flight
+        # check below and the `esphome run --device` invocation further
+        # down. Server always sends its best-known address; "OTA" is the
+        # ESPHome self-resolve sentinel used when the server has none.
+        ota_address = job.get("ota_address") or "OTA"
+
+        # ---------------------------------------------------------------
+        # SOTA.5: pre-flight reachability check. Only for a "normal" job —
+        # not validate_only, not already download_only (which covers
+        # server_ota=True Thread/Matter jobs, forced above), and only when
+        # there's a real address to probe. If *this* worker can't reach
+        # the device's OTA port, fall back to the exact same compile-only
+        # + central-OTA-push mechanism already used for Thread/Matter
+        # devices instead of attempting (and likely failing) `esphome run`
+        # locally.
+        # ---------------------------------------------------------------
+        requires_server_ota = False
+        if (
+            OTA_REACHABILITY_CHECK
+            and not validate_only
+            and not download_only
+            and ota_address != "OTA"
+        ):
+            reachable, check_log = _check_ota_reachable(ota_address, target_path)
+            _flush_log_text(job_id, check_log)
+            if not reachable:
+                logger.info(
+                    "Job %s: device %s unreachable from this worker; falling back to server-side OTA",
+                    job_id, ota_address,
+                )
+                download_only = True
+                requires_server_ota = True
+
         # ---------------------------------------------------------------
         # Validation phase (validate_only=True) — runs esphome config and exits
         # ---------------------------------------------------------------
@@ -1891,7 +2088,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
             compile_cmd = [esphome_bin, "compile", target_path]
             _log_invocation(job_id, compile_cmd)
             # #242: same IDF install serialisation as the OTA path below.
-            idf_cold = not _idf_is_warm(esphome_version)
+            idf_cold = not _idf_is_warm(esphome_version, esphome_bin)
             if idf_cold:
                 _flush_log_text(
                     job_id,
@@ -1908,7 +2105,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                     env=subprocess_env,
                     job_id=job_id,
                 )
-                if not _is_broken_idf_state(compile_log):
+                if compile_ok and not _is_broken_idf_state(compile_log):
                     _mark_idf_warm(esphome_version)
             # #242 self-heal — see the run_cmd block below for context.
             if not compile_ok and _is_broken_idf_state(compile_log):
@@ -1927,7 +2124,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                             env=subprocess_env,
                             job_id=job_id,
                         )
-                        if not _is_broken_idf_state(compile_log):
+                        if compile_ok and not _is_broken_idf_state(compile_log):
                             _mark_idf_warm(esphome_version)
             # #214: same self-heal as the OTA path — see the comment on
             # the run_cmd retry block below for context.
@@ -1965,7 +2162,11 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
             ):
                 _submit_result(job_id, "failed", log=None, ota_result=None)
                 return
-            _submit_result(job_id, "success", log=None, ota_result=None)
+            # SOTA.5: requires_server_ota is only True when this worker
+            # dynamically diverted here after a failed reachability check
+            # (genuine server_ota=True Thread jobs already carry that flag
+            # server-side from enqueue and don't need this signal).
+            _submit_result(job_id, "success", log=None, ota_result=None, requires_server_ota=requires_server_ota)
             return
 
         # ---------------------------------------------------------------
@@ -1983,9 +2184,10 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
         #     target prompt (#176). Without this, ESPHome prompts when the
         #     worker has multiple possible targets (e.g. a USB serial dongle
         #     plus the OTA target), and the worker has no stdin.
+        #
+        # ota_address is already computed above (also used by the SOTA.5
+        # reachability pre-flight check).
         # ---------------------------------------------------------------
-        ota_address = job.get("ota_address") or "OTA"
-
         _report_status(job_id, "Compiling + OTA" + (" (retry)" if ota_only else ""))
         run_cmd = [
             esphome_bin, "run", target_path,
@@ -2000,7 +2202,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
         # exclusive, so this slot performs the install alone; warm =>
         # shared, so slots run parallel but still wait behind any cold
         # install in flight.
-        idf_cold = not _idf_is_warm(esphome_version)
+        idf_cold = not _idf_is_warm(esphome_version, esphome_bin)
         if idf_cold:
             _flush_log_text(
                 job_id,
@@ -2017,7 +2219,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                 env=subprocess_env,
                 job_id=job_id,
             )
-            if not _is_broken_idf_state(run_log):
+            if run_ok and not _is_broken_idf_state(run_log):
                 _mark_idf_warm(esphome_version)
 
         # #242 self-heal: a poisoned cache predating this fix (or a race
@@ -2043,7 +2245,7 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                         env=subprocess_env,
                         job_id=job_id,
                     )
-                    if not _is_broken_idf_state(run_log):
+                    if run_ok and not _is_broken_idf_state(run_log):
                         _mark_idf_warm(esphome_version)
 
         # #214 / #220: when the compile failed with any of the broken-
@@ -2129,12 +2331,29 @@ def run_job(client_id: str, job: dict, version_manager: VersionManager, worker_i
                 # OTA-retry outcome, archive the firmware on the server
                 # so the user can still flash it by hand (or re-OTA
                 # later) if the device is unreachable.
-                _archive_firmware_to_server(
+                archived = _archive_firmware_to_server(
                     job_id, build_dir, target_stem,
                     client_id=client_id, required=False,
                 )
                 if retry_ok:
                     _submit_result(job_id, "success", log=None, ota_result="success")
+                elif OTA_REACHABILITY_CHECK and archived and ota_address != "OTA":
+                    # SOTA.5 last-resort fallback: the pre-flight reachability
+                    # check passed (or was skipped because ota_address was
+                    # unknown at the time), but the actual local OTA attempt
+                    # still failed after a retry — e.g. a marginal/flaky WiFi
+                    # link where the TCP handshake succeeds but the OTA
+                    # protocol exchange itself times out (a class of failure
+                    # a bare TCP probe can't detect). The firmware is already
+                    # archived on the server, so ask the server to attempt
+                    # the push centrally instead of just failing the job —
+                    # same mechanism as a statically-flagged Thread job.
+                    _flush_log_text(
+                        job_id,
+                        "\n--- Local OTA failed again after retry — asking the "
+                        "server to attempt the push centrally instead. ---\n",
+                    )
+                    _submit_result(job_id, "success", log=None, ota_result=None, requires_server_ota=True)
                 else:
                     _submit_result(job_id, "success", log=None, ota_result="failed")
                     diag = _ota_network_diagnostics(target_path, build_dir, subprocess_env)
@@ -2319,14 +2538,26 @@ def _submit_result(
     status: str,
     log: Optional[str],
     ota_result: Optional[str],
+    requires_server_ota: bool = False,
 ) -> None:
-    """POST job result to server, retrying a few times on network errors."""
+    """POST job result to server, retrying a few times on network errors.
+
+    ``requires_server_ota`` (SOTA.5) signals a dynamic fallback: this
+    worker compiled successfully but determined at runtime it couldn't
+    reach the device, so the server should perform the OTA push centrally
+    (same mechanism as a statically-flagged Thread/Matter job).
+    """
     # Build + validate the submission via the typed model. ``status`` is a
     # Literal["success","failed"] on the wire — pydantic will reject anything
     # else before it is ever sent. The cast + model_validate path makes mypy
     # happy without silencing the check with a blanket ignore.
     submission = JobResultSubmission.model_validate(
-        {"status": status, "log": log, "ota_result": ota_result}
+        {
+            "status": status,
+            "log": log,
+            "ota_result": ota_result,
+            "requires_server_ota": requires_server_ota,
+        }
     )
     payload = submission.model_dump(exclude_none=True)
 
@@ -2355,20 +2586,26 @@ def _collect_firmware_variants(build_dir: str, target_stem: str) -> dict[str, Pa
       {build_dir}/.esphome/build/{device_name}/.pioenvs/{device_name}/firmware.bin
 
       {build_dir}/.esphome/build/{device_name}/build/firmware.factory.bin                   (native ESP-IDF — ESP32 since ESPHome 2026.7)
-      {build_dir}/.esphome/build/{device_name}/build/firmware.bin
+      {build_dir}/.esphome/build/{device_name}/build/firmware.bin      or  firmware.ota.bin
 
     ESPHome 2026.7 replaced PlatformIO with a native ESP-IDF installer
     for ESP32 targets; that toolchain drops the
     ``.pioenvs/{device_name}/`` staging directory entirely and writes
     binaries straight into ``build/``. Both shapes are checked so
     Arduino/LibreTiny targets (still PlatformIO) and ESP-IDF-native
-    ESP32 targets both resolve.
+    ESP32 targets both resolve. Within the native-ESP-IDF shape, the
+    OTA-safe filename itself has moved at least once — observed as
+    ``firmware.bin`` and, as of ESPHome 2026.7's esp32c6 native build,
+    ``firmware.ota.bin`` (both created alongside ``firmware.factory.bin``
+    and ``firmware.elf``) — so both are checked and either one satisfies
+    the ``ota`` variant.
 
     Returns a mapping of ``variant → path``:
       - ``factory``: full flash image (ESP32 only; used for first
         USB/serial flash).
-      - ``ota``: the ``firmware.bin`` shape (smaller, OTA-safe; ESP32
-        produces this alongside factory; ESP8266 produces only this).
+      - ``ota``: the smaller, OTA-safe shape — ``firmware.bin`` or
+        ``firmware.ota.bin`` depending on toolchain version; ESP32
+        produces this alongside factory, ESP8266 produces only this.
 
     The device name can differ from the target filename stem if the
     YAML uses substitutions, so we walk every device_dir under
@@ -2393,22 +2630,33 @@ def _collect_firmware_variants(build_dir: str, target_stem: str) -> dict[str, Pa
             device_dir / "build",                        # native ESP-IDF layout
         ]
         for root in candidate_roots:
+            # "ota" has two possible filenames: PlatformIO and older
+            # ESP-IDF-native builds emit firmware.bin; ESPHome's ESP32
+            # native-ESP-IDF toolchain (2026.7+) renamed it to
+            # firmware.ota.bin. Check both so neither toolchain silently
+            # loses its OTA-safe variant (bug: pool-pump build produced
+            # only firmware.ota.bin, so the old firmware.bin-only check
+            # found nothing, archived just "factory", and server-side OTA
+            # failed before it could even ping the device).
             candidates = {
-                "factory": root / "firmware.factory.bin",
-                "ota": root / "firmware.bin",
+                "factory": [root / "firmware.factory.bin"],
+                "ota": [root / "firmware.bin", root / "firmware.ota.bin"],
             }
-            for variant_name, path in candidates.items():
-                if not path.is_file():
-                    continue
+            for variant_name, paths in candidates.items():
                 # First-match wins when multiple device_dirs/roots exist
                 # (usually there's only one; substitutions don't spawn
                 # duplicates).
-                if variant_name not in variants:
+                if variant_name in variants:
+                    continue
+                for path in paths:
+                    if not path.is_file():
+                        continue
                     variants[variant_name] = path
                     logger.info(
                         "Located firmware variant %s for %s: %s (%d bytes)",
                         variant_name, target_stem, path, path.stat().st_size,
                     )
+                    break
 
     if not variants:
         logger.warning(

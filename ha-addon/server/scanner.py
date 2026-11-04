@@ -227,6 +227,32 @@ def get_esphome_version() -> str:
     return _get_installed_esphome_version()
 
 
+def esphome_install_in_flight() -> bool:
+    """True while the server's ESPHome venv is still being lazy-installed (#247).
+
+    Distinguishes "not ready yet" from "tried and failed": ``_esphome_ready``
+    is unset during the 1–3 minute first-boot install *and* after a failed
+    one, so the failure flag has to be consulted to tell them apart. Callers
+    use this to decide whether a downstream error is transient (retry will
+    succeed once the install lands) or a real problem to surface.
+    """
+    return not _esphome_ready.is_set() and not _esphome_install_failed
+
+
+def esphome_import_error(exc: BaseException) -> bool:
+    """True if *exc* is the server's own ESPHome venv not being importable (#247).
+
+    The bundle subprocess surfaces this as a ``RuntimeError`` wrapping the
+    child's stderr, so the ``ModuleNotFoundError`` arrives as text rather
+    than as an exception type we can catch. Matching the message is
+    deliberate: the alternative is treating every bundle failure during the
+    install window as transient, which would swallow real YAML errors a user
+    happened to hit at the wrong moment.
+    """
+    text = f"{type(exc).__name__}: {exc}"
+    return "No module named 'esphome'" in text or "No module named \"esphome\"" in text
+
+
 def _get_installed_esphome_version() -> str:
     """Return the installed ESPHome version, or a diagnostic sentinel.
 
@@ -415,7 +441,13 @@ config = load_yaml(target_path)
 if not isinstance(config, dict):
     sys.stderr.write(f"YAML root of {target_path.name} is not a mapping\n")
     sys.exit(2)
-result = validate_config(config, None, skip_external_update=True)
+# #250: let ESPHome honour each remote source's own `refresh:` (default 1d;
+# `refresh: never` stays never), exactly as `esphome compile` does. With
+# skip_external_update=True the first clone of a `packages:` /
+# `external_components:` repo was frozen forever, so upstream fixes never
+# reached dispatch (KaufHA's ESPHome 2026.10 fix). Safe from the #111 git
+# race: create_bundle_async serialises every bundle behind _BUNDLE_LOCK.
+result = validate_config(config, None, skip_external_update=False)
 if result.errors:
     first = result.errors[0]
     msg = getattr(first, "msg", None) or str(first)
@@ -423,7 +455,7 @@ if result.errors:
         f"validation errors ({len(result.errors)} total): {msg}\n"
     )
     sys.exit(3)
-bundle = ConfigBundleCreator(result).create_bundle()
+bundle =ConfigBundleCreator(result).create_bundle()
 sys.stdout.buffer.write(bundle.data)
 """
 
@@ -1136,7 +1168,8 @@ def _full_validate_config(path: Path) -> dict:
     typos elsewhere in the file). Returns the validated config dict on
     success.
 
-    Serialized via ``_validator_lock`` and prefixed with ``CORE.reset()``:
+    Caller must hold ``_validator_lock`` for the duration of this call
+    (see ``_resolve_esphome_config``) and prefix with ``CORE.reset()``:
     ESPHome's CORE is process-global and non-reentrant; without the
     lock, concurrent executor threads interleave CORE mutations and
     produce phantom "Duplicate entity" errors on targets that validate
@@ -1151,22 +1184,21 @@ def _full_validate_config(path: Path) -> dict:
     from esphome.yaml_util import load_yaml  # noqa: PLC0415
     from esphome.config import validate_config  # noqa: PLC0415
 
-    with _validator_lock:
-        CORE.reset()
-        CORE.config_path = path
-        config = load_yaml(path)
-        if not isinstance(config, dict):
-            raise ValueError(f"YAML root of {path.name} is not a mapping")
-        # skip_external_update=True reuses any previously-cloned external
-        # component sources; the first validation per external-components
-        # entry still clones. Same caching shape we've always used for
-        # do_packages_pass.
-        result = validate_config(config, None, skip_external_update=True)
-        if result.errors:
-            first = result.errors[0]
-            msg = getattr(first, "msg", None) or str(first)
-            raise RuntimeError(f"validation errors ({len(result.errors)} total): {msg}")
-        return result
+    CORE.reset()
+    CORE.config_path = path
+    config = load_yaml(path)
+    if not isinstance(config, dict):
+        raise ValueError(f"YAML root of {path.name} is not a mapping")
+    # skip_external_update=True reuses any previously-cloned external
+    # component sources; the first validation per external-components
+    # entry still clones. Same caching shape we've always used for
+    # do_packages_pass.
+    result = validate_config(config, None, skip_external_update=True)
+    if result.errors:
+        first = result.errors[0]
+        msg = getattr(first, "msg", None) or str(first)
+        raise RuntimeError(f"validation errors ({len(result.errors)} total): {msg}")
+    return result
 
 
 def _resolve_esphome_config(config_dir: str, target: str) -> Optional[dict]:
@@ -1220,18 +1252,41 @@ def _resolve_esphome_config(config_dir: str, target: str) -> Optional[dict]:
 
         # Stage 1 — full validation. Catches domain-aware addressing and
         # every other schema-level field ESPHome injects.
+        #
+        # Non-blocking lock: _full_validate_config can hold this lock for
+        # 60-120 s when resolving configs with external git components. If
+        # this function is called from the event loop thread (e.g.
+        # /ui/api/targets 1-Hz poll), blocking here freezes the entire
+        # server. Return None immediately if the lock is busy — the caller
+        # falls back to raw YAML metadata and the cache will be populated
+        # by the background executor task (build_name_to_target_map /
+        # reseed_device_poller_from_config).
+        #
+        # The acquire is held for the ENTIRE validation call, not just
+        # checked-then-released: releasing before calling
+        # _full_validate_config (which used to acquire the same lock
+        # itself, blockingly) left a race window where another thread
+        # could grab the lock in between, and this caller would then block
+        # on _full_validate_config's own acquire anyway — defeating the
+        # whole point of checking non-blocking first. Holding it here for
+        # the duration closes that window.
+        if not _validator_lock.acquire(blocking=False):
+            return None
         try:
-            config = _full_validate_config(path)
-            _config_cache[target] = (mtime, config)
-            return config
-        except Exception as exc:
-            logger.warning(
-                "Full validation of %s failed (%s: %s) — falling back to "
-                "substitution-only pass. UI metadata will still populate "
-                "but domain-aware OTA addressing will not.",
-                target, type(exc).__name__, exc,
-            )
-            logger.debug("Full validation traceback for %s:", target, exc_info=True)
+            try:
+                config = _full_validate_config(path)
+                _config_cache[target] = (mtime, config)
+                return config
+            except Exception as exc:
+                logger.warning(
+                    "Full validation of %s failed (%s: %s) — falling back to "
+                    "substitution-only pass. UI metadata will still populate "
+                    "but domain-aware OTA addressing will not.",
+                    target, type(exc).__name__, exc,
+                )
+                logger.debug("Full validation traceback for %s:", target, exc_info=True)
+        finally:
+            _validator_lock.release()
 
         # Stage 2 — substitution-only fallback (legacy path). Preserves
         # behavior for configs that don't fully validate so device
@@ -1696,6 +1751,17 @@ def _fill_missing_metadata(raw_config: dict, result: dict) -> None:
     # failed but top-level YAML has web_server:)
     if not result["has_web_server"] and "web_server" in raw_config:
         result["has_web_server"] = True
+
+    # SOTA.3: detect network_type from raw YAML so Thread auto-detection works
+    # even when full ESPHome resolution fails or ESPHome isn't ready yet.
+    # Precedence mirrors _extract_metadata: openthread > ethernet > wifi.
+    if result["network_type"] is None:
+        if isinstance(raw_config.get("openthread"), dict):
+            result["network_type"] = "thread"
+        elif isinstance(raw_config.get("ethernet"), dict):
+            result["network_type"] = "ethernet"
+        elif isinstance(raw_config.get("wifi"), dict):
+            result["network_type"] = "wifi"
 
 
 def get_friendly_name(config_dir: str, target: str) -> Optional[str]:

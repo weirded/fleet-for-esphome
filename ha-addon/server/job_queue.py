@@ -75,6 +75,12 @@ class Job:
     # binary back to the server for download. Mutually exclusive with
     # validate_only.
     download_only: bool = False
+    # SOTA.1: compile on worker, OTA from server. Worker runs esphome compile
+    # (same as download_only) and uploads the binary; server then runs
+    # `esphome upload --device <ota_address> --file <bin> <target.yaml>`.
+    # Used for Thread/Matter devices whose IPv6 mesh is only reachable from
+    # the HA host. Any worker can compile; OTA is always server-side.
+    server_ota: bool = False
     # FD.1: set to True once the worker has POSTed the binary to
     # /api/v1/jobs/{id}/firmware. Drives the Queue-tab Download button.
     has_firmware: bool = False
@@ -173,6 +179,7 @@ class Job:
             "ota_only": self.ota_only,
             "validate_only": self.validate_only,
             "download_only": self.download_only,
+            "server_ota": self.server_ota,
             "has_firmware": self.has_firmware,
             "ota_address": self.ota_address,
             "pinned_client_id": self.pinned_client_id,
@@ -215,6 +222,7 @@ class Job:
             ota_only=d.get("ota_only", False),
             validate_only=d.get("validate_only", False),
             download_only=d.get("download_only", False),
+            server_ota=d.get("server_ota", False),
             has_firmware=d.get("has_firmware", False),
             ota_address=d.get("ota_address"),
             pinned_client_id=d.get("pinned_client_id"),
@@ -374,6 +382,32 @@ class JobQueue:
                 job.state = JobState.PENDING
                 job.assigned_client_id = None
                 job.assigned_at = None
+            # SOTA.2 restart recovery: a server_ota job whose compile
+            # succeeded but whose OTA push hadn't finished is stranded. The
+            # push runs as an in-process asyncio task (api._server_ota_push)
+            # with no persisted progress, so a restart loses it for good --
+            # and the job is already terminal (SUCCESS), so neither the
+            # WORKING reset above nor timeout_checker will ever revisit it.
+            # Left alone it renders as a permanently-spinning "Server OTA"
+            # row (isJobInProgress treats success + ota_result=None as
+            # in-flight). Mark the OTA as failed so the state is honest and
+            # the user gets the normal OTA-retry affordance.
+            elif (
+                job.state == JobState.SUCCESS
+                and job.server_ota
+                and job.ota_result is None
+            ):
+                job.ota_result = "failed"
+                job.status_text = None
+                logger.warning(
+                    "Job %s (%s): server-side OTA was still in flight at "
+                    "shutdown; marking it failed so it can be retried",
+                    job.id, job.target,
+                )
+                # Keep the History tab in step with the live queue, the
+                # same way patch_ota_result does. Best-effort by design:
+                # _record_history no-ops when the DAO isn't wired up yet.
+                self._record_history(job)
             # Bug #18: no longer prune terminal jobs by age on startup.
             # The user clears the queue explicitly from the UI; auto-
             # deleting history on restart meant that a user who scheduled
@@ -433,6 +467,7 @@ class JobQueue:
         timeout_seconds: int,
         validate_only: bool = False,
         download_only: bool = False,
+        server_ota: bool = False,
         ota_address: Optional[str] = None,
         pinned_client_id: Optional[str] = None,
         config_hash: Optional[str] = None,
@@ -487,6 +522,7 @@ class JobQueue:
                 followup.esphome_version = esphome_version
                 followup.pinned_client_id = pinned_client_id
                 followup.ota_address = ota_address
+                followup.server_ota = server_ota
                 followup.timeout_seconds = timeout_seconds
                 followup.run_id = run_id  # belongs to the latest request
                 followup.worker_tag_filter = worker_tag_filter
@@ -546,6 +582,7 @@ class JobQueue:
                 timeout_seconds=timeout_seconds,
                 validate_only=validate_only,
                 download_only=download_only,
+                server_ota=server_ota,
                 ota_address=ota_address,
                 pinned_client_id=pinned_client_id,
                 is_followup=is_followup,
@@ -679,11 +716,19 @@ class JobQueue:
         status: str,
         log: Optional[str] = None,
         ota_result: Optional[str] = None,
+        requires_server_ota: bool = False,
     ) -> bool:
         """Record the final result of a job.
 
         Also handles OTA-only updates: if the job is already SUCCESS/FAILED
         and only ota_result is provided (no log), just patch ota_result.
+
+        ``requires_server_ota`` (SOTA.5): the worker compiled successfully
+        but determined at runtime it couldn't reach the device itself, and
+        is asking the server to perform the OTA push centrally. Retroactively
+        flips ``job.server_ota`` so this job is indistinguishable downstream
+        from a statically-detected Thread/Matter job — same UI rendering,
+        same ``_server_ota_push`` trigger in api.py, same history column.
         """
         async with self._lock:
             job = self._jobs.get(job_id)
@@ -739,6 +784,13 @@ class JobQueue:
             job.status_text = None
             if ota_result is not None:
                 job.ota_result = ota_result
+            if requires_server_ota and status == "success":
+                job.server_ota = True
+                logger.info(
+                    "Job %s (%s): worker reported it can't reach the device; "
+                    "flipping to server-side OTA",
+                    job_id, job.target,
+                )
             job.finished_at = _utcnow()
             self._persist()
             # JH.2: snapshot this terminal transition. Inside the async
@@ -950,6 +1002,49 @@ class JobQueue:
                         self._record_history(j)
             return affected
 
+    async def release_for_retry(self, job_id: str, reason: str) -> bool:
+        """Put a claimed job back to PENDING without burning a real failure (#247).
+
+        Used when the *server* couldn't hand the job over for a reason that
+        has nothing to do with the job — specifically, a compile dispatched
+        during the 1–3 minute window where the server's ESPHome venv is still
+        lazy-installing. That failure is transient by construction: the same
+        job succeeds on the next poll a few seconds later.
+
+        Before this existed the job was failed outright with "Fix the YAML
+        error above", pointing the user at a config that was never wrong. It
+        is not an exotic path — it is what you hit immediately after changing
+        your pinned ESPHome version, and it recurs every time upstream
+        ESPHome publishes a release (twice in the 1.7.3 → 1.8 cycle alone).
+
+        Bounded by the same ``MAX_RETRIES`` as the timeout path so a genuinely
+        stuck install can't spin forever: past the cap the caller is told to
+        fail the job for real, with an honest message. Returns True if the job
+        went back to PENDING, False if the cap is reached (or the job is gone
+        / not WORKING, which means something else already moved it).
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.state != JobState.WORKING:
+                return False
+            job.retry_count += 1
+            if job.retry_count >= MAX_RETRIES:
+                logger.warning(
+                    "Job %s: %s — retry cap %d reached, failing for real",
+                    job_id, reason, MAX_RETRIES,
+                )
+                return False
+            job.state = JobState.PENDING
+            job.assigned_client_id = None
+            job.assigned_hostname = None
+            job.assigned_at = None
+            logger.info(
+                "Job %s released back to PENDING: %s (retry %d/%d)",
+                job_id, reason, job.retry_count, MAX_RETRIES,
+            )
+            self._persist()
+            return True
+
     async def retry(
         self,
         job_ids: list[str],
@@ -1006,6 +1101,7 @@ class JobQueue:
                     run_id=run_id,
                     timeout_seconds=timeout_seconds,
                     ota_only=is_ota_failed,
+                    server_ota=job.server_ota,
                     pinned_client_id=pin_to,
                     config_hash=config_hash,
                 )
@@ -1018,6 +1114,29 @@ class JobQueue:
             if new_jobs:
                 self._persist()
             return new_jobs
+
+    async def patch_ota_result(
+        self, job_id: str, ota_result: str, log: Optional[str] = None
+    ) -> None:
+        """SOTA.2: set ota_result on an already-terminal job after server-side OTA.
+
+        Does not re-run the state machine — job remains SUCCESS. Appends the
+        server OTA log to any existing log so the Queue tab log modal shows it.
+        """
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.ota_result = ota_result
+            if log:
+                job.log = (job.log or "") + "\n--- Server OTA ---\n" + log
+            self._persist()
+            # JH.2: upsert history row so the new ota_result lands there too
+            # (mirrors the OTA-patch branch in submit_result) — without
+            # this, the History tab stayed stuck on the NULL ota_result the
+            # initial compile-success call wrote, even after server OTA
+            # completed.
+            self._record_history(job)
 
     async def update_status(self, job_id: str, status_text: str) -> bool:
         """Update the in-progress status text for a running job (not persisted)."""

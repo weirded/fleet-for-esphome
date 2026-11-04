@@ -13,7 +13,7 @@ import aiohttp
 from aiohttp import web
 
 from app_config import AppConfig
-from helpers import safe_resolve, json_error
+from helpers import safe_resolve, json_error, is_valid_ota_address
 from device_poller import Device
 from job_queue import JobState
 from scanner import (
@@ -909,6 +909,7 @@ async def get_targets(request: web.Request) -> web.Response:
                     "ota_result": last_compile_by_target[target].get("ota_result"),
                     "validate_only": bool(last_compile_by_target[target].get("validate_only")),
                     "download_only": bool(last_compile_by_target[target].get("download_only")),
+                    "server_ota": bool(last_compile_by_target[target].get("server_ota")),
                     "source": "history",
                 }
                 if target in last_compile_by_target
@@ -1639,7 +1640,22 @@ async def get_esphome_versions(request: web.Request) -> web.Response:
         "selected": selected,
         "detected": detected,
         "available": available,
+        "latest_stable": _latest_stable(request.app["_rt"].get("esphome_available_versions", [])),
     })
+
+
+def _latest_stable(versions: list[str]) -> str | None:
+    """#257: newest stable ESPHome release on PyPI, or None when unknown.
+
+    Computed from the raw PyPI list only (not the selected-version
+    fallback above) so a PyPI outage reports "unknown" instead of
+    pretending the selected version is the latest release. Consumed by
+    the HA integration's "Latest ESPHome version" sensor.
+    """
+    # Lazy import mirrors refresh_esphome_versions: main imports ui_api.
+    from main import _pick_latest_stable_version  # noqa: PLC0415
+
+    return _pick_latest_stable_version(versions)
 
 
 @routes.post("/ui/api/esphome-versions/refresh")
@@ -1672,6 +1688,7 @@ async def refresh_esphome_versions(request: web.Request) -> web.Response:
         "selected": selected,
         "detected": detected,
         "available": available,
+        "latest_stable": _latest_stable(available),
     })
 
 
@@ -2408,6 +2425,18 @@ async def start_compile(request: web.Request) -> web.Response:
             return web.json_response(
                 {"error": "address too long (max 253 chars)"}, status=400,
             )
+        elif not is_valid_ota_address(address_override):
+            # This value ends up as an argv entry for `esphome upload
+            # --device <addr>` on the worker and, for a server_ota job,
+            # for the server-side pre-flight ping as well. No shell is
+            # involved, so this is not a command-injection guard — but
+            # both consumers parse a leading dash as a flag, so an
+            # "address" like "-f" would be interpreted rather than
+            # dialled. Require a literal IP or a real hostname.
+            return web.json_response(
+                {"error": "address must be an IP address or hostname"},
+                status=400,
+            )
     cfg = _cfg(request)
     queue = request.app["queue"]
     device_poller = request.app.get("device_poller")
@@ -2486,6 +2515,27 @@ async def start_compile(request: web.Request) -> web.Response:
             if pinned:
                 effective_version = pinned
 
+        # SOTA.3: auto-detect Thread targets. Thread devices use IPv6 mesh
+        # only reachable from the HA host, so any OTA must be server-side.
+        # Any worker can compile; the server performs the actual flash.
+        #
+        # download_only wins over both the auto-detection and an explicit
+        # server_ota request: it means "compile and hand me the binary, do
+        # not touch the device". Letting server_ota through here would run
+        # _server_ota_push once the compile lands and flash a device the
+        # user explicitly asked us not to flash.
+        # Executor: a cache miss runs full ESPHome validation (and first-time
+        # remote-source clones) — on the event loop that stalled every HTTP
+        # request and worker heartbeat for the length of a bulk enqueue.
+        _target_meta = await asyncio.get_running_loop().run_in_executor(
+            None, get_device_metadata, cfg.config_dir, target,
+        )
+        _is_thread = _target_meta.get("network_type") == "thread"
+        effective_server_ota = (
+            not download_only
+            and (_is_thread or bool(body.get("server_ota", False)))
+        )
+
         from settings import get_settings as _gs  # noqa: PLC0415
         from git_versioning import get_head as _get_head  # noqa: PLC0415
         job = await queue.enqueue(
@@ -2494,6 +2544,7 @@ async def start_compile(request: web.Request) -> web.Response:
             run_id=run_id,
             timeout_seconds=_gs().job_timeout,
             download_only=download_only,
+            server_ota=effective_server_ota,
             ota_address=ota_addresses.get(target),
             pinned_client_id=pinned_client_id,
             config_hash=_get_head(Path(cfg.config_dir)),
@@ -2999,11 +3050,17 @@ async def rename_target(request: web.Request) -> web.Response:
     server_version = get_esphome_version()
     from settings import get_settings as _gs  # noqa: PLC0415
     from git_versioning import get_head as _get_head  # noqa: PLC0415
+    # SOTA.3: detect Thread target for rename-triggered recompile.
+    _rename_meta = await asyncio.get_running_loop().run_in_executor(
+        None, get_device_metadata, _cfg(request).config_dir, new_filename,
+    )
+    _rename_server_ota = _rename_meta.get("network_type") == "thread"
     await queue.enqueue(
         target=new_filename,
         esphome_version=server_version,
         run_id=str(uuid.uuid4()),
         timeout_seconds=_gs().job_timeout,
+        server_ota=_rename_server_ota,
         ota_address=old_device_addr,
         config_hash=_get_head(config_dir),
     )
@@ -3372,12 +3429,19 @@ async def retry_jobs(request: web.Request) -> web.Response:
 
 
 async def _remove_worker_handler(request: web.Request, client_id: str) -> web.Response:
-    """Remove an offline worker from the registry."""
+    """Delete an offline worker — the only way a worker leaves the registry.
+
+    Online workers are refused: a running worker would simply re-register
+    on its next heartbeat, so deleting it would be a no-op with a confusing
+    flicker. The UI disables the menu item with the same hint.
+    """
     registry = request.app["registry"]
     from settings import get_settings as _gs  # noqa: PLC0415
 
     if registry.is_online(client_id, _gs().worker_offline_threshold):
-        return web.json_response({"error": "Cannot remove an online worker"}, status=409)
+        return web.json_response(
+            {"error": "Cannot delete an online worker — stop it first"}, status=409,
+        )
     if not registry.remove(client_id):
         return web.json_response({"error": "Unknown client_id"}, status=404)
     return web.json_response({"ok": True})

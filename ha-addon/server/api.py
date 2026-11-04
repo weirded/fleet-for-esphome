@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
+import re
+import tarfile
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -17,8 +21,9 @@ from app_config import AppConfig
 from constants import (
     HEADER_X_CLIENT_ID, HEADER_X_WORKER_ID,
     MIN_IMAGE_VERSION,
+    SERVER_OTA_ABSOLUTE_TIMEOUT, SERVER_OTA_IDLE_TIMEOUT,
 )
-from job_queue import JobState
+from job_queue import Job, JobState
 from protocol import (
     PROTOCOL_VERSION,
     DeregisterRequest,
@@ -35,6 +40,8 @@ from protocol import (
     WorkerDiagnosticsUpload,
     WorkerLogAppend,
 )
+import firmware_storage
+import scanner as _scanner
 from scanner import create_bundle_async, get_esphome_version
 
 # Worker code bundled inside this container
@@ -168,6 +175,10 @@ async def _register_worker_handler(request: web.Request) -> web.Response:
         resolved_quota = msg.disk_quota_bytes
 
     registry = request.app["registry"]
+    # Adoption of an offline same-hostname row (registry.register) uses the
+    # same offline threshold the UI does, so "offline" means the same thing
+    # in both places.
+    from settings import get_settings as _get_settings  # noqa: PLC0415
     client_id = registry.register(
         msg.hostname,
         msg.platform,
@@ -178,6 +189,7 @@ async def _register_worker_handler(request: web.Request) -> web.Response:
         image_version=msg.image_version,
         tags=resolved_tags,
         disk_quota_bytes=resolved_quota,
+        offline_threshold_secs=_get_settings().worker_offline_threshold,
     )
     # TG.3: a new worker (or one re-registering with different tags)
     # may unblock or newly-block PENDING jobs. Fire-and-forget — the
@@ -270,18 +282,21 @@ def _image_version_ok(reported: Optional[str]) -> bool:
 
 
 async def _deregister_handler(request: web.Request) -> web.Response:
-    """Remove a worker from the registry on clean shutdown."""
+    """Clean worker shutdown: mark it offline immediately but keep the row.
+
+    Workers only leave the registry when the operator deletes them from
+    the Workers tab — a shutdown is not a deletion.
+    """
     msg, err = await _parse_body(request, DeregisterRequest)
     if err is not None:
         return err
     assert msg is not None
 
     registry = request.app["registry"]
-    # #94: capture hostname before remove() drops it from the registry.
     worker = registry.get(msg.client_id)
     hostname = worker.hostname if worker else "?"
-    if registry.remove(msg.client_id):
-        logger.info("Worker %s [%s] deregistered (clean shutdown)", hostname, msg.client_id)
+    if registry.mark_stopped(msg.client_id):
+        logger.info("Worker %s [%s] deregistered (clean shutdown) — kept in registry", hostname, msg.client_id)
         # TG.3: a worker leaving the pool may push PENDING jobs to BLOCKED.
         from routing_eligibility import fire_and_forget  # noqa: PLC0415
         fire_and_forget(request.app)
@@ -547,6 +562,41 @@ async def get_next_job(request: web.Request) -> web.Response:
         # would leave the user staring at a greyed-out row with no
         # explanation.
         logger.exception("Failed to create bundle for job %s", job.id)
+
+        # #247: not every failure here is the user's YAML. Bundling imports
+        # the server's own lazy-installed ESPHome, so a compile dispatched
+        # during the 1-3 minute install window dies with
+        # `ModuleNotFoundError: No module named 'esphome'` — and then got
+        # told to go fix a config that was never wrong. That window opens
+        # every time the pinned ESPHome version changes, which the UI makes
+        # one click away, and every time upstream publishes a release; it
+        # hit the release smoke twice in the 1.7.3 -> 1.8 cycle.
+        #
+        # The server already knows the install is in flight, so don't just
+        # reword the message — put the job back and let the next poll pick
+        # it up, which is what a human would do. release_for_retry is
+        # bounded by MAX_RETRIES so a genuinely stuck install still lands on
+        # a real failure rather than spinning.
+        installing = _scanner.esphome_install_in_flight()
+        if _scanner.esphome_import_error(exc) or installing:
+            released = await queue.release_for_retry(
+                job.id, "server ESPHome still installing (#247)"
+            )
+            if released:
+                # 204 = "nothing for you right now". The worker polls again
+                # on its normal interval and the job is PENDING again.
+                return web.Response(status=204)
+            err_msg = (
+                f"Bundle creation failed for {job.target}: "
+                f"{type(exc).__name__}: {exc}\n\n"
+                "The server's ESPHome install did not become ready after "
+                "several retries. This is a server-side problem, not a "
+                "problem with this config — check the add-on log for "
+                "ESPHome install errors."
+            )
+            await queue.submit_result(job.id, "failed", log=err_msg)
+            return web.json_response({"error": "Bundle creation failed"}, status=500)
+
         err_msg = (
             f"Bundle creation failed for {job.target}: "
             f"{type(exc).__name__}: {exc}\n\n"
@@ -584,10 +634,268 @@ async def get_next_job(request: web.Request) -> web.Response:
         ota_only=job.ota_only,
         validate_only=job.validate_only,
         download_only=job.download_only,
+        server_ota=job.server_ota,
         ota_address=job.ota_address,
         server_timezone=server_tz,
     )
     return web.json_response(assignment.model_dump(exclude_none=True))
+
+
+# Matches ESPHome ProgressBar's "Uploading: [====...] NN%" frames (emitted
+# via --dashboard, see _server_ota_push). Takes the last match in a chunk
+# since a single read() can contain more than one \r-redrawn frame.
+#
+# Anchored to the "Uploading" label rather than matching a bare ``NN%``:
+# esphome's output carries other percentages (RAM/flash usage summaries,
+# pip progress from a lazy component install), and a loose ``(\d+)%``
+# scrapes those into status_text as a bogus upload percentage.
+_UPLOAD_PROGRESS_RE = re.compile(r"Uploading[^\r\n]*?(\d+)%")
+
+# Strong references to in-flight _server_ota_push tasks. asyncio only holds
+# a weak reference to a running task, so without this the garbage collector
+# is free to cancel a push mid-transfer. Entries remove themselves via the
+# done callback at the scheduling site.
+_server_ota_tasks: set[asyncio.Task] = set()
+
+
+async def _server_ota_push(app: web.Application, job: Job) -> None:
+    """SOTA.2: perform server-side OTA after a server_ota compile job succeeds.
+
+    Any worker can compile; this function runs on the server (HA host) which
+    has direct access to Thread/Matter device IPv6 addresses. Reads the OTA
+    binary from firmware_storage, extracts the config bundle to a temp dir,
+    and runs ``esphome upload --device <addr> --file <bin> <target.yaml>``.
+    Updates ota_result on the job via patch_ota_result so the Queue tab shows
+    the final outcome. Fires as a fire-and-forget asyncio.Task.
+    """
+    queue = app["queue"]
+    cfg: AppConfig = app["config"]
+    job_id: str = job.id
+    ota_addr: str = job.ota_address or ""
+    target: str = job.target
+
+    if not _scanner._esphome_ready.is_set() or not _scanner._server_esphome_bin:
+        logger.error("Server OTA %s: ESPHome not ready on server", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+    esphome_bin: str = _scanner._server_esphome_bin
+
+    # Only the OTA-safe shapes are valid here. "factory" is the full flash
+    # image (bootloader + partition table + app at absolute offsets, meant
+    # for a first flash via serial/esptool) — pushing it through the OTA
+    # protocol writes the wrong bytes into the OTA partition and can fail
+    # verification at the device's finalize step. "firmware" is the
+    # pre-#69 legacy synthetic name for the same OTA-safe shape as "ota".
+    ota_binary = (
+        firmware_storage.read_firmware(job_id, variant="ota")
+        or firmware_storage.read_firmware(job_id, variant="firmware")
+    )
+    if not ota_binary:
+        logger.error(
+            "Server OTA %s: no OTA-safe firmware binary found in storage "
+            "(a factory-only image can't be safely pushed via OTA)", job_id,
+        )
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    try:
+        bundle_bytes = await create_bundle_async(cfg.config_dir, target)
+    except Exception:
+        logger.exception("Server OTA %s: config bundle creation failed", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    ota_ok = False
+    ota_log = ""
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"sota-{job_id[:8]}-") as tmpdir:
+            with tarfile.open(fileobj=io.BytesIO(bundle_bytes), mode="r:gz") as tf:
+                # Same safer extraction as the worker's extract_bundle()
+                # (client.py) — filter="data" strips path-traversal/symlink
+                # tricks a malicious or corrupted bundle could otherwise use.
+                try:
+                    tf.extractall(tmpdir, filter="data")
+                except TypeError:
+                    tf.extractall(tmpdir)  # Python < 3.12
+
+            target_yaml = Path(tmpdir) / target
+            if not target_yaml.exists():
+                logger.error(
+                    "Server OTA %s: target %s not found in bundle", job_id, target
+                )
+                await queue.patch_ota_result(job_id, "failed")
+                return
+
+            ota_bin_path = target_yaml.with_suffix(".ota.bin")
+            ota_bin_path.write_bytes(ota_binary)
+
+            # Pre-flight ping to surface connectivity issues early in the log.
+            # Runs on the server (HA host), not on the compile worker.
+            #
+            # SOTA.5: this path used to be Thread/Matter-only, where
+            # ota_addr is always a resolved IPv6 literal (fd00::...) — a
+            # hardcoded ping6 made sense. Now that ordinary WiFi/Ethernet
+            # devices can also land here (worker-unreachable fallback),
+            # ota_addr is just as often IPv4, and ping6 against an IPv4
+            # address fails immediately with "Address family for hostname
+            # not supported" rather than actually pinging. Pick the right
+            # binary based on the address itself; a hostname (not a
+            # literal IP — shouldn't normally happen since device_poller
+            # always resolves to a literal, but be defensive) falls back
+            # to plain ping.
+            # Lazy imports — neither is module-level in api.py, and both are
+            # only needed on this server-side OTA push path, not the common
+            # compile-only job path most jobs take.
+            import ipaddress as _ipaddress  # noqa: PLC0415
+            import socket as _socket  # noqa: PLC0415
+            server_hostname = _socket.gethostname()
+            try:
+                is_ipv6 = isinstance(_ipaddress.ip_address(ota_addr), _ipaddress.IPv6Address)
+            except ValueError:
+                is_ipv6 = False
+            ping_cmd = ["ping6" if is_ipv6 else "ping", "-c", "3", "-W", "5", ota_addr]
+            logger.info(
+                "Server OTA %s: pinging %s from server (%s)",
+                job_id, ota_addr, server_hostname,
+            )
+            try:
+                ping_proc = await asyncio.create_subprocess_exec(
+                    *ping_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                ping_out, _ = await asyncio.wait_for(ping_proc.communicate(), timeout=20)
+                ping_log = ping_out.decode("utf-8", errors="replace") if ping_out else ""
+                ping_ok = ping_proc.returncode == 0
+                logger.info(
+                    "Server OTA %s: ping %s — %s",
+                    job_id, ota_addr, "reachable" if ping_ok else "unreachable",
+                )
+            except Exception as ping_exc:
+                ping_log = f"ping failed: {ping_exc}"
+                ping_ok = False
+                logger.warning("Server OTA %s: ping error: %s", job_id, ping_exc)
+
+            cmd = [
+                esphome_bin,
+                # --dashboard forces ESPHome's ProgressBar to emit periodic
+                # "Uploading: [====] NN%" frames even over a piped, non-tty
+                # stdout (it's a no-op otherwise). It's ESPHome's own
+                # dashboard that relies on this same flag to parse live
+                # progress out of a subprocess — same use case here: gives
+                # the idle-timeout loop below real progress to reset
+                # against during a slow transfer, and lets us surface
+                # upload % in the Queue tab via status_text. This is a
+                # top-level flag (registered on the main argument parser,
+                # not the "upload" subcommand's) so it must come BEFORE
+                # the subcommand name, not after it.
+                "--dashboard",
+                "upload",
+                "--device", ota_addr,
+                "--file", str(ota_bin_path),
+                str(target_yaml),
+            ]
+            logger.info(
+                "Server OTA %s (%s): %s", job_id, target, " ".join(cmd)
+            )
+            ota_log = f"--- ping {ota_addr} from server ({server_hostname}) ---\n{ping_log}\n"
+            proc: asyncio.subprocess.Process | None = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    cwd=tmpdir,
+                )
+                assert proc.stdout is not None  # guaranteed by stdout=PIPE above
+                proc_stdout = proc.stdout
+                # Progress-based timeout, not a flat total-duration bound:
+                # Thread OTA can legitimately take minutes for a sub-1MB
+                # image on a slow/lossy mesh. Read incrementally and reset
+                # the idle clock on every chunk received (including the
+                # --dashboard progress frames above) — only genuine
+                # silence for SERVER_OTA_IDLE_TIMEOUT counts as stuck, with
+                # SERVER_OTA_ABSOLUTE_TIMEOUT as a last-resort safety net.
+                chunks: list[bytes] = []
+                last_reported_pct: int | None = None
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + SERVER_OTA_ABSOLUTE_TIMEOUT
+                stuck_reason: str | None = None
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        stuck_reason = f"exceeded the {SERVER_OTA_ABSOLUTE_TIMEOUT}s absolute cap"
+                        break
+                    read_timeout = min(SERVER_OTA_IDLE_TIMEOUT, remaining)
+                    try:
+                        chunk = await asyncio.wait_for(
+                            proc_stdout.read(4096), timeout=read_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        if remaining <= SERVER_OTA_IDLE_TIMEOUT:
+                            stuck_reason = f"exceeded the {SERVER_OTA_ABSOLUTE_TIMEOUT}s absolute cap"
+                        else:
+                            stuck_reason = (
+                                f"no output for {SERVER_OTA_IDLE_TIMEOUT}s "
+                                "(transfer appears stuck, not just slow)"
+                            )
+                        break
+                    if not chunk:
+                        break  # EOF — process finished producing output
+                    chunks.append(chunk)
+
+                    match = _UPLOAD_PROGRESS_RE.findall(
+                        chunk.decode("utf-8", errors="replace")
+                    )
+                    if match and int(match[-1]) != last_reported_pct:
+                        last_reported_pct = int(match[-1])
+                        try:
+                            await queue.update_status(job_id, f"Uploading {last_reported_pct}%")
+                        except Exception:
+                            logger.debug("Failed to update status_text for job %s", job_id, exc_info=True)
+
+                collected_log = b"".join(chunks).decode("utf-8", errors="replace")
+                if stuck_reason:
+                    ota_ok = False
+                    proc.kill()
+                    await proc.wait()
+                    ota_log += f"{collected_log}\nServer OTA {stuck_reason}"
+                else:
+                    await proc.wait()
+                    ota_ok = proc.returncode == 0
+                    ota_log += collected_log
+            except Exception as exc:
+                ota_ok = False
+                ota_log += f"Server OTA subprocess error: {exc}"
+                # An exception here (a bad read, a queue.update_status
+                # failure propagating unexpectedly, etc.) can leave `proc`
+                # still running while the surrounding `TemporaryDirectory`
+                # is about to be cleaned up out from under it — it's
+                # reading the OTA binary from that directory. Kill it
+                # rather than let an `esphome upload` outlive its tmpdir.
+                if proc is not None and proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+    except Exception:
+        logger.exception("Server OTA %s: unexpected error during OTA push", job_id)
+        await queue.patch_ota_result(job_id, "failed")
+        return
+
+    logger.info(
+        "Server OTA %s (%s): %s", job_id, target, "success" if ota_ok else "failed"
+    )
+    await queue.patch_ota_result(job_id, "success" if ota_ok else "failed", log=ota_log)
+
+    if ota_ok:
+        device_poller = app.get("device_poller")
+        if device_poller is not None:
+            try:
+                asyncio.create_task(device_poller.refresh_target(target))
+            except Exception:
+                logger.exception(
+                    "Server OTA %s: failed to schedule device refresh for %s",
+                    job_id, target,
+                )
 
 
 @routes.post("/api/v1/jobs/{id}/result")
@@ -607,9 +915,47 @@ async def submit_job_result(request: web.Request) -> web.Response:
     if job and job.assigned_client_id:
         registry.set_job(job.assigned_client_id, None)
 
-    ok = await queue.submit_result(job_id, msg.status, msg.log, msg.ota_result)
+    ok = await queue.submit_result(
+        job_id, msg.status, msg.log, msg.ota_result,
+        requires_server_ota=msg.requires_server_ota,
+    )
     if not ok:
         return _protocol_error("job_not_found_or_wrong_state", status=404)
+
+    # SOTA.2: after a server_ota compile succeeds, push OTA from the server.
+    # The worker submitted ota_result=None (compile only); the server now
+    # performs the actual flash using esphome upload server-side. The block
+    # below (note_target_flashed / refresh_target) does not fire for this
+    # submission since msg.ota_result is None here — _server_ota_push fires
+    # its own refresh_target once the real OTA completes.
+    #
+    # download_only is checked again here even though start_compile already
+    # refuses to set server_ota on such a job. This is the last gate before
+    # a device actually gets written to, and the two flags arriving together
+    # -- from a queue.json written by an older build, or a future caller of
+    # enqueue() that doesn't replicate the rule -- must never be resolved in
+    # favour of flashing.
+    refreshed_job = queue.get(job_id)
+    if (
+        refreshed_job is not None
+        and getattr(refreshed_job, "server_ota", False)
+        and not getattr(refreshed_job, "download_only", False)
+        and msg.status == "success"
+        and refreshed_job.has_firmware
+        and refreshed_job.ota_address
+    ):
+        try:
+            # Hold a strong reference until the push finishes. The event loop
+            # only keeps a weak one, so a bare create_task() can be garbage
+            # collected mid-flight -- and this task legitimately runs for up
+            # to SERVER_OTA_ABSOLUTE_TIMEOUT (30 min), which is a long time
+            # to be collectable. Same pattern git_versioning._pending and
+            # worker_log_broker use for their own long-lived tasks.
+            task = asyncio.create_task(_server_ota_push(request.app, refreshed_job))
+            _server_ota_tasks.add(task)
+            task.add_done_callback(_server_ota_tasks.discard)
+        except Exception:
+            logger.exception("Failed to schedule server OTA push for job %s", job_id)
 
     # #11: push fresh ``running_version`` + ``compilation_time`` into the UI
     # within ~1s after a successful OTA instead of waiting up to one

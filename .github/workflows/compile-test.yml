@@ -43,7 +43,7 @@ jobs:
       matrix:
         esphome_version:
           - "2026.4.0"  # pinned floor — `MIN_ESPHOME_VERSION`
-          - "2026.7.3"  # latest stable shipped (bump per release) — regression guard for #240 (py3.12 floor)
+          - "2026.10.2"  # latest stable shipped (bump per release); >=2026.7 also guards #240 (py3.12 floor)
         target:
           - esp8266-arduino
           - esp32-arduino
@@ -63,7 +63,7 @@ jobs:
           - esp32c6-thread
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build client image
         run: docker build -t esphome-dist-client ha-addon/client/
@@ -93,7 +93,7 @@ jobs:
       matrix:
         esphome_version:
           - "2026.4.0"
-          - "2026.7.3"
+          - "2026.10.2"
         # Test a subset on the server image — if client passes, server should too
         # Focus on the platforms that historically had issues (toolchain deps)
         target:
@@ -103,7 +103,7 @@ jobs:
           - esp32c3-idf
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build server image
         run: docker build -t esphome-dist-server ha-addon/

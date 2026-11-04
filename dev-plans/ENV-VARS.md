@@ -32,6 +32,7 @@ Generated 2026-04-23 from `grep -rnE 'os\.environ|os\.getenv' ha-addon/{server,c
 | `ESPHOME_SEED_VERSION` | unset | Pre-install this ESPHome version on worker startup so first-job latency is lower. | `client.py:115` |
 | `ESPHOME_VERSIONS_DIR` | `/esphome-versions` | Parent directory for version-manager venvs. Read in two places (`client.py:117` and `version_manager.py:16`). | `client.py:117` |
 | `MIN_FREE_DISK_PCT` | `10` | Refuse to install a new ESPHome venv if free disk % is below this. | `version_manager.py:19` |
+| `ESPHOME_INSTALL_TIMEOUT` | `300` | Seconds allowed per `pip install esphome==X` attempt (two attempts). Raise it on slow single-board hosts — #193 measured ~14 min for a full install on a Zimaboard, where the 300 s ceiling meant the version could never install at all. Clamped to a 60 s floor; a non-integer value warns and falls back to 300. | `version_manager.py` (`_install_timeout_from_env`) |
 | `HOST_PLATFORM` | auto-detect (`uname`) | Override the OS string displayed in the Workers tab (e.g. `macOS 15.3 (Apple M1 Pro)` when running the worker binary outside a Linux container). | `sysinfo.py:182` |
 | `DISTRIBUTED_ESPHOME_CLIENT_ID` | auto-generated + persisted | Persistent worker identity (UUID). Generated on first boot, stored in a state file, then re-exported into the environment for subprocesses. Not typically user-set. | `client.py:232` (written at `client.py:477`) |
 
@@ -40,5 +41,5 @@ Generated 2026-04-23 from `grep -rnE 'os\.environ|os\.getenv' ha-addon/{server,c
 - **`HOSTNAME` vs `WORKER_HOSTNAME`**: code reads `HOSTNAME`; historical docker-compose snippets elsewhere sometimes show `WORKER_HOSTNAME`. Only `HOSTNAME` is wired.
 - **Duplicate reads**: `MAX_ESPHOME_VERSIONS` and `ESPHOME_VERSIONS_DIR` each read in both `client.py` and `version_manager.py`. Defaults match; no divergence today.
 - **`POLL_INTERVAL` default drift**: code is `1`, CLAUDE.md's worker table says `5`. CLAUDE.md is stale.
-- **Int-parse defensiveness**: only `PORT` guards against malformed values. Every other `int(os.environ.get(...))` on the worker will raise `ValueError` at import time on a typo.
-- **Undocumented internals**: `TZ`, `PLATFORM`, `MIN_FREE_DISK_PCT`, `DISTRIBUTED_ESPHOME_CLIENT_ID` are not user-facing; they're not listed in CLAUDE.md's worker env table or `ha-addon/DOCS.md`.
+- **Int-parse defensiveness**: `PORT` and `ESPHOME_INSTALL_TIMEOUT` guard against malformed values. Every other `int(os.environ.get(...))` on the worker will raise `ValueError` at import time on a typo.
+- **Undocumented internals**: `TZ`, `PLATFORM`, `MIN_FREE_DISK_PCT`, `DISTRIBUTED_ESPHOME_CLIENT_ID` are not user-facing; they're not listed in CLAUDE.md's worker env table or `ha-addon/DOCS.md`. `ESPHOME_INSTALL_TIMEOUT` **is** user-facing (#193) and is listed in both.

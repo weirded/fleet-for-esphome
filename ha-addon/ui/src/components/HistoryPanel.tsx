@@ -363,7 +363,27 @@ export function HistoryPanel({
                   // ~870px of pane-width, so we have to opt out of the
                   // auto-inline fallback to actually see two panes.
                   useInlineViewWhenSpaceIsLimited: false,
-                  renderOverviewRuler: false,
+                  // #204 (1): the overview ruler paints every change as a
+                  // coloured tick in the scrollbar, so a long config shows
+                  // at a glance where the edits are instead of forcing a
+                  // scroll-hunt. It was off because the drawer is narrow;
+                  // the ruler costs a few px and is the cheapest possible
+                  // answer to "where did this diff actually change?".
+                  renderOverviewRuler: true,
+                  // #204 (2): GitHub-style collapse of untouched lines.
+                  // A one-line edit to a 300-line YAML rendered 300 lines
+                  // and made the user find the changed one. Monaco folds
+                  // the unchanged runs behind a click-to-expand band,
+                  // keeping 3 lines of context either side of each hunk.
+                  // minimumLineCount guards the opposite failure: don't
+                  // fold a 4-line gap between two hunks, where the band
+                  // takes more room than the lines it hides.
+                  hideUnchangedRegions: {
+                    enabled: true,
+                    contextLineCount: 3,
+                    minimumLineCount: 5,
+                    revealLineCount: 20,
+                  },
                   minimap: { enabled: false },
                   scrollBeyondLastLine: false,
                   fontSize: 12,

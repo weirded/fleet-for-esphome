@@ -146,6 +146,9 @@ class DevicePoller:
         self._encryption_keys: dict[str, str] = {}  # device_name → noise_psk (base64)
         self._address_overrides: dict[str, str] = {}  # device_name → use_address
         self._address_sources: dict[str, str] = {}  # device_name → e.g. "wifi_use_address"
+        # #171/#197: device names whose mDNS-observed IP disagrees with an
+        # explicit YAML address. Logged once each, not on every announce.
+        self._addr_mismatch_logged: set[str] = set()
         self._lock = asyncio.Lock()
         self._zeroconf: Optional[AsyncZeroconf] = None
         self._browser: Optional[ServiceBrowser] = None
@@ -279,7 +282,34 @@ class DevicePoller:
                 dev.online = True
                 dev.last_seen = _utcnow()
                 if ip:
-                    dev.ip_address = ip
+                    # #171/#197: an explicit YAML address that is an IP
+                    # literal is what ``resolve_ota_address`` will actually
+                    # use (branch ``override_ip_literal`` — it outranks
+                    # ``dev.ip_address`` unconditionally). Letting mDNS
+                    # overwrite the displayed IP therefore put the UI in
+                    # permanent disagreement with the address every compile
+                    # was flashing to, which is exactly what #197 reported.
+                    # Keep the YAML value and record the disagreement in the
+                    # log instead — a device answering at an address its own
+                    # config doesn't claim is the finding, not a display
+                    # detail to paper over.
+                    pinned = self._address_override_for(existing_key) or \
+                        self._address_override_for(device_name)
+                    pinned_wins = bool(pinned) and _is_ip_literal(str(pinned))
+                    if pinned_wins and str(pinned) != ip:
+                        if existing_key not in self._addr_mismatch_logged:
+                            self._addr_mismatch_logged.add(existing_key)
+                            logger.info(
+                                "Device %s answers mDNS at %s but its YAML "
+                                "pins %s (source=%s) — keeping the YAML "
+                                "address, which is what OTA uploads target. "
+                                "Reflash the device or fix the YAML if this "
+                                "is wrong (#197).",
+                                existing_key, ip, pinned, dev.address_source,
+                            )
+                    else:
+                        self._addr_mismatch_logged.discard(existing_key)
+                        dev.ip_address = ip
                     # mDNS only "wins" over the YAML-derived source if the
                     # YAML had no explicit address (was just {name}.local).
                     # Explicit user choices like wifi.use_address /
@@ -713,6 +743,23 @@ class DevicePoller:
                         existing_key, addr, source,
                     )
                     dev.ip_address = addr
+                elif dev.ip_address != addr and source and source != "mdns_default":
+                    # #171: the row already had an address, so the old code
+                    # (``if not dev.ip_address``) left it alone forever —
+                    # editing ``manual_ip.static_ip`` in the YAML changed
+                    # what OTA flashed to but never what the Devices tab
+                    # showed. Rescans happen on every config change, so this
+                    # is the point where a user's edit should land. Only an
+                    # *explicit* YAML address takes over: ``mdns_default``
+                    # is our own ``{name}.local`` guess, which must never
+                    # displace a real IP mDNS discovered.
+                    logger.info(
+                        "Address for %s changed in YAML: %s → %s (source=%s)",
+                        existing_key, dev.ip_address, addr, source,
+                    )
+                    dev.ip_address = addr
+                    dev.address_source = source
+                    self._addr_mismatch_logged.discard(existing_key)
                 # ALWAYS fill in the address source if it's missing — this
                 # covers cached devices loaded from /data/device_cache.json
                 # (which were saved before address_source was a field) where

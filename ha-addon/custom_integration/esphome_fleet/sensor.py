@@ -4,6 +4,7 @@ Device-scoped sensors, grouped by what user-facing question they answer:
 
 Global (hub device):
     QueueDepthSensor             — count of pending + working jobs.
+    LatestEsphomeVersionSensor   — newest stable ESPHome on PyPI (#257).
 
 Per managed target:
     TargetScheduleSensor         — human-readable recurring cron schedule
@@ -63,6 +64,7 @@ async def async_setup_entry(
         WorkerCountSensor(coordinator, eid, url),
         TotalSlotsSensor(coordinator, eid, url),
         SelectedEsphomeVersionSensor(coordinator, eid, url),
+        LatestEsphomeVersionSensor(coordinator, eid, url),
         FleetVersionSensor(coordinator, eid, url),
         TotalDevicesSensor(coordinator, eid, url),
         OnlineDevicesSensor(coordinator, eid, url),
@@ -112,7 +114,7 @@ class QueueDepthSensor(CoordinatorEntity[EsphomeFleetCoordinator], SensorEntity)
     """Count of non-terminal (pending + working) jobs."""
 
     _attr_has_entity_name = True
-    _attr_name = "Queue depth"
+    _attr_translation_key = "queue_depth"
     _attr_icon = "mdi:tray-full"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "jobs"
@@ -171,7 +173,7 @@ class _HubSensorBase(CoordinatorEntity[EsphomeFleetCoordinator], SensorEntity):
 class WorkerCountSensor(_HubSensorBase):
     """#42 — number of registered workers."""
 
-    _attr_name = "Workers"
+    _attr_translation_key = "workers"
     _attr_icon = "mdi:server-network"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "workers"
@@ -187,7 +189,7 @@ class WorkerCountSensor(_HubSensorBase):
 class TotalSlotsSensor(_HubSensorBase):
     """#42 — sum of max_parallel_jobs across all workers."""
 
-    _attr_name = "Total build slots"
+    _attr_translation_key = "total_build_slots"
     _attr_icon = "mdi:slot-machine"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "slots"
@@ -204,7 +206,7 @@ class TotalSlotsSensor(_HubSensorBase):
 class SelectedEsphomeVersionSensor(_HubSensorBase):
     """#43 — currently selected ESPHome version on the server."""
 
-    _attr_name = "Selected ESPHome version"
+    _attr_translation_key = "selected_esphome_version"
     _attr_icon = "mdi:tag"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -217,10 +219,32 @@ class SelectedEsphomeVersionSensor(_HubSensorBase):
         return versions.get("selected") or None
 
 
+class LatestEsphomeVersionSensor(_HubSensorBase):
+    """#257 — newest stable ESPHome release on PyPI, as known to the add-on.
+
+    The add-on refreshes the PyPI list hourly. State changes exactly when
+    a new ESPHome release ships, so a `state` trigger on this entity is
+    the "notify me about new ESPHome releases" automation. Not
+    DIAGNOSTIC: users trigger automations off it. `None` (unknown) while
+    PyPI hasn't been reached yet.
+    """
+
+    _attr_translation_key = "latest_esphome_version"
+    _attr_icon = "mdi:tag-arrow-up"
+
+    def __init__(self, coordinator: EsphomeFleetCoordinator, entry_id: str, base_url: str) -> None:
+        super().__init__(coordinator, entry_id, base_url, "latest_esphome_version")
+
+    @property
+    def native_value(self) -> str | None:
+        versions = (self.coordinator.data or {}).get("esphome_versions") or {}
+        return versions.get("latest_stable") or None
+
+
 class FleetVersionSensor(_HubSensorBase):
     """#44 — Fleet for ESPHome add-on version."""
 
-    _attr_name = "Fleet version"
+    _attr_translation_key = "fleet_version"
     _attr_icon = "mdi:information-outline"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -236,7 +260,7 @@ class FleetVersionSensor(_HubSensorBase):
 class TotalDevicesSensor(_HubSensorBase):
     """#46 — count of managed targets."""
 
-    _attr_name = "Total devices"
+    _attr_translation_key = "total_devices"
     _attr_icon = "mdi:devices"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "devices"
@@ -252,7 +276,7 @@ class TotalDevicesSensor(_HubSensorBase):
 class OnlineDevicesSensor(_HubSensorBase):
     """#46 — count of online targets."""
 
-    _attr_name = "Online devices"
+    _attr_translation_key = "online_devices"
     _attr_icon = "mdi:lan-connect"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "devices"
@@ -269,7 +293,7 @@ class OnlineDevicesSensor(_HubSensorBase):
 class OutdatedDevicesSensor(_HubSensorBase):
     """#46 — count of targets needing an update."""
 
-    _attr_name = "Outdated devices"
+    _attr_translation_key = "outdated_devices"
     _attr_icon = "mdi:update"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "devices"
@@ -373,7 +397,7 @@ class TargetScheduleSensor(_TargetSensorBase):
     device's own internal schedule.
     """
 
-    _attr_name = "Upgrade schedule"
+    _attr_translation_key = "upgrade_schedule"
     _attr_icon = "mdi:calendar-clock"
 
     def __init__(
@@ -403,7 +427,7 @@ class TargetScheduledOnceSensor(_TargetSensorBase):
     in a human-friendly format, or "None" when no one-shot is pending.
     """
 
-    _attr_name = "Scheduled one-time upgrade"
+    _attr_translation_key = "scheduled_one_time_upgrade"
     _attr_icon = "mdi:calendar-star"
 
     def __init__(
@@ -435,7 +459,7 @@ class TargetPinnedVersionSensor(_TargetSensorBase):
     releases.
     """
 
-    _attr_name = "Pinned ESPHome version"
+    _attr_translation_key = "pinned_esphome_version"
     _attr_icon = "mdi:pin"
 
     def __init__(
@@ -491,7 +515,7 @@ class _WorkerSensorBase(CoordinatorEntity[EsphomeFleetCoordinator], SensorEntity
 class WorkerActiveJobsSensor(_WorkerSensorBase):
     """Count of WORKING jobs assigned to the worker."""
 
-    _attr_name = "Active jobs"
+    _attr_translation_key = "active_jobs"
     _attr_icon = "mdi:wrench-cog"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "jobs"
@@ -515,7 +539,7 @@ class WorkerActiveJobsSensor(_WorkerSensorBase):
 class WorkerDiskUsageSensor(_WorkerSensorBase):
     """Disk utilization % reported by the worker (#29)."""
 
-    _attr_name = "Disk usage"
+    _attr_translation_key = "disk_usage"
     _attr_icon = "mdi:harddisk"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
@@ -542,7 +566,7 @@ class WorkerDiskUsageSensor(_WorkerSensorBase):
 class WorkerCpuCoresSensor(_WorkerSensorBase):
     """CPU core count reported by the worker (#29)."""
 
-    _attr_name = "CPU cores"
+    _attr_translation_key = "cpu_cores"
     _attr_icon = "mdi:cpu-64-bit"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "cores"
@@ -568,7 +592,7 @@ class WorkerCpuCoresSensor(_WorkerSensorBase):
 class WorkerCpuUsageSensor(_WorkerSensorBase):
     """CPU utilization % reported by the worker (#29)."""
 
-    _attr_name = "CPU usage"
+    _attr_translation_key = "cpu_usage"
     _attr_icon = "mdi:gauge"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
@@ -600,7 +624,7 @@ class WorkerDiskFreeSensor(_WorkerSensorBase):
     Matches what the UI's Workers tab shows.
     """
 
-    _attr_name = "Disk free"
+    _attr_translation_key = "disk_free"
     _attr_icon = "mdi:harddisk-plus"
 
     def __init__(
@@ -624,7 +648,7 @@ class WorkerMemorySensor(_WorkerSensorBase):
     Pre-formatted string sensor — see :class:`WorkerDiskFreeSensor`.
     """
 
-    _attr_name = "Memory"
+    _attr_translation_key = "memory"
     _attr_icon = "mdi:memory"
 
     def __init__(

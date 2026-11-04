@@ -447,7 +447,9 @@ export function EditorModal({ target, onClose, onSaved, onToast, onValidate, onC
               suggestOnTriggerCharacters: true,
               wordBasedSuggestions: 'off',
               acceptSuggestionOnCommitCharacter: true,
-              hover: { enabled: true },
+              // DEP.2 / monaco 0.56: hover.enabled widened from boolean
+              // to 'off' | 'on' | 'onKeyboardModifier'.
+              hover: { enabled: 'on' },
               glyphMargin: true,
             }}
             onMount={handleEditorDidMount}

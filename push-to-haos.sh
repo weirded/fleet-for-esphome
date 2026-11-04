@@ -161,7 +161,7 @@ set -euo pipefail
 TMPJSON=$(mktemp); trap 'rm -f "$TMPJSON"' EXIT
 pvesh create "/nodes/$PVE_NODE/qemu/$VMID/agent/exec" \
   --command /bin/sh --command -c --command \
-  'docker exec addon_local_esphome_dist_server cat /data/settings.json 2>/dev/null || true' \
+  'c=$(docker ps --format "{{.Names}}" | grep -E "^(app|addon)_local_esphome_dist_server$" | head -1); [ -n "$c" ] && docker exec "$c" cat /data/settings.json 2>/dev/null || true' \
   --output-format json > "$TMPJSON"
 PID=$(python3 -c "import sys,json; print(json.load(open(sys.argv[1]))['pid'])" "$TMPJSON")
 for _ in $(seq 1 30); do

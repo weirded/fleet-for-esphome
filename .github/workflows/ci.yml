@@ -16,9 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: "pip"
@@ -95,9 +95,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: "pip"
@@ -132,9 +132,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: "pip"
@@ -145,31 +145,29 @@ jobs:
       - name: pip-audit (server lockfile)
         run: |
           pip install pip-audit
-          pip-audit --requirement ha-addon/server/requirements.lock \
-            --ignore-vuln CVE-2026-34073 \
-            --ignore-vuln CVE-2026-39892 \
-            --ignore-vuln CVE-2026-25645 \
-            --ignore-vuln CVE-2026-40192
-          # ^^^ Pinned by ESPHome's transitive dep bounds — can't upgrade
-          # until ESPHome releases with relaxed constraints.
+          pip-audit --requirement ha-addon/server/requirements.lock
+          # No --ignore-vuln entries. The four that used to live here
+          # (CVE-2026-34073, CVE-2026-39892, CVE-2026-25645,
+          # CVE-2026-40192) were all retired on 2026-08-24 because they
+          # stopped suppressing anything:
           #
-          # Applicability assessment (2026-04-13):
-          #   CVE-2026-34073 (cryptography — DNS name constraint bypass):
-          #     NOT APPLICABLE. Transitive dep only; server↔worker comms
-          #     use HTTP, not HTTPS. Certificate validation never runs.
-          #   CVE-2026-39892 (cryptography — buffer overflow via non-contiguous buffers):
-          #     LOW RISK. Transitive dep; our code never passes custom buffers
-          #     to cryptographic APIs. Only theoretical path is Noise PSK in
-          #     aioesphomeapi, but buffer management is internal to the library.
-          #   CVE-2026-25645 (requests — predictable temp file in extract_zipped_paths):
-          #     NOT APPLICABLE. We never call extract_zipped_paths(); only
-          #     standard requests.get()/post() usage in client.py.
-          #   CVE-2026-40192 (pillow — image decoder issues, fix in 12.2.0):
-          #     NOT APPLICABLE. Pillow is a transitive dep of esphome, used
-          #     internally during YAML compilation for font/glyph rendering
-          #     (icon embedding, display layouts). The server/worker NEVER
-          #     accept user-uploaded images — only YAML configs. Pinned by
-          #     esphome==2026.3.3 to ==12.1.1; track upstream for relaxed bound.
+          #   * The two cryptography CVEs are fixed in 50.0.0, which the
+          #     server lockfile now pins (floor added to requirements.txt
+          #     to clear PYSEC-2026-3552 / CVE-2026-69247).
+          #   * CVE-2026-25645 (requests, extract_zipped_paths) no longer
+          #     matches the pinned requests 2.34.2.
+          #   * CVE-2026-40192 (pillow) referenced a package that isn't in
+          #     this lockfile at all any more — pillow came in via esphome,
+          #     and SE.1 dropped esphome from the server image back in 1.4.1.
+          #
+          # Their justification comment also claimed the versions were
+          # "pinned by ESPHome's transitive dep bounds — can't upgrade",
+          # which had stopped being true. Verified: this lockfile audits
+          # clean with zero ignores. Keeping dead suppressions would mean a
+          # future regression of any of these four passes CI silently, which
+          # is the exact failure mode PY-7 exists to prevent. If a new vuln
+          # needs suppressing, add it back WITH a fresh dated applicability
+          # assessment per PY-7 — do not restore this list wholesale.
 
       - name: pip-audit (client lockfile)
         run: pip-audit --requirement ha-addon/client/requirements.lock
@@ -181,9 +179,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: "npm"

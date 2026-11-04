@@ -2,8 +2,13 @@ import { expect, test } from '@playwright/test';
 import { mockApi } from './fixtures';
 
 // QS.25 follow-up — Workers tab actions: clean cache, parallel-jobs slot
-// control, remove offline worker. WL.3 consolidated Clean Cache / Remove
+// control, delete offline worker. WL.3 consolidated Clean Cache / Delete
 // and "View logs" into a single per-row "Actions" dropdown menu.
+//
+// Worker lifecycle: workers never leave the list on their own (not on a
+// clean shutdown, not on an add-on restart). Delete is the only exit, so
+// the item is always present — disabled with a hint while the worker is
+// online, since a running worker would just re-register.
 
 test.beforeEach(async ({ page }) => {
   await mockApi(page);
@@ -24,12 +29,42 @@ async function openActions(page: import('@playwright/test').Page, hostname: stri
 test('actions dropdown reveals Clean cache for online workers', async ({ page }) => {
   await openActions(page, 'build-server-1');
   await expect(page.getByRole('menuitem', { name: 'Clean cache' })).toBeVisible();
-  await expect(page.getByRole('menuitem', { name: 'Remove' })).toHaveCount(0);
 });
 
-test('actions dropdown reveals Remove for offline workers', async ({ page }) => {
+test('Delete is present but disabled with a hint for online workers', async ({ page }) => {
+  await openActions(page, 'build-server-1');
+  const deleteItem = page.getByRole('menuitem', { name: 'Delete' });
+  await expect(deleteItem).toBeVisible();
+  await expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTitle(/stop the worker first/i)).toBeVisible();
+});
+
+test('Delete is present but disabled with a hint for the built-in worker', async ({ page }) => {
+  // The shared fixture has no built-in worker (it would ripple through
+  // every worker-selection spec), so this test serves its own list.
+  const { workers } = await import('./fixtures');
+  await page.unroute('**/ui/api/workers');
+  await page.route('**/ui/api/workers', route =>
+    route.fulfill({
+      json: [
+        ...workers,
+        { ...workers[0], client_id: 'worker-local', hostname: 'local-worker', tags: [] },
+      ],
+    }),
+  );
+  await expect(page.getByText('local-worker').first()).toBeVisible({ timeout: 5000 });
+  await openActions(page, 'local-worker');
+  const deleteItem = page.getByRole('menuitem', { name: 'Delete' });
+  await expect(deleteItem).toBeVisible();
+  await expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTitle(/built-in worker/i)).toBeVisible();
+});
+
+test('actions dropdown enables Delete for offline workers', async ({ page }) => {
   await openActions(page, 'build-server-2');
-  await expect(page.getByRole('menuitem', { name: 'Remove' })).toBeVisible();
+  const deleteItem = page.getByRole('menuitem', { name: 'Delete' });
+  await expect(deleteItem).toBeVisible();
+  await expect(deleteItem).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.getByRole('menuitem', { name: 'Clean cache' })).toHaveCount(0);
 });
 
@@ -55,7 +90,7 @@ test('Clean cache fires POST /workers/{id}/clean', async ({ page }) => {
   await expect.poll(() => cleanedFor).toBe('worker-1');
 });
 
-test('Remove offline worker fires DELETE /workers/{id}', async ({ page }) => {
+test('Delete offline worker fires DELETE /workers/{id}', async ({ page }) => {
   let removedFor: string | null = null;
   await page.unroute('**/ui/api/workers/*');
   await page.route('**/ui/api/workers/*', route => {
@@ -67,7 +102,7 @@ test('Remove offline worker fires DELETE /workers/{id}', async ({ page }) => {
   });
 
   await openActions(page, 'build-server-2');
-  const removeItem = page.getByRole('menuitem', { name: 'Remove' });
+  const removeItem = page.getByRole('menuitem', { name: 'Delete' });
   await expect(removeItem).toBeVisible();
   await removeItem.click();
 

@@ -6,8 +6,8 @@ description: |
   queue, and device discovery — for users who want to run on Kubernetes.
   Pair with the esphome-fleet-worker chart for build workers.
 type: application
-version: 0.1.0
-appVersion: "1.7.0"
+version: 0.2.0
+appVersion: "1.8.0"
 home: https://github.com/weirded/fleet-for-esphome
 sources:
   - https://github.com/weirded/fleet-for-esphome

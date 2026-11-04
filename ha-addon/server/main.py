@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import re
 import sys
 import time
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, Any, Optional
 
 import aiohttp
 from aiohttp import web
@@ -800,25 +801,69 @@ async def config_scanner(app: web.Application) -> None:
     """
     from scanner import scan_configs, build_name_to_target_map  # noqa: PLC0415
 
-    cfg: AppConfig = app["config"]
-    device_poller = app.get("device_poller")
-    prev_targets: list[str] = []
-    loop = asyncio.get_running_loop()
-
+    state: dict[str, Any] = {}
     while True:
         await asyncio.sleep(30)
         try:
-            targets = await loop.run_in_executor(None, scan_configs, cfg.config_dir)
-            if targets != prev_targets:
-                logger.info("Config change detected: %d targets (was %d)", len(targets), len(prev_targets))
-                if device_poller:
-                    name_map, enc_keys, addr_overrides, addr_sources = await loop.run_in_executor(
-                        None, build_name_to_target_map, cfg.config_dir, targets,
-                    )
-                    device_poller.update_compile_targets(targets, name_map, enc_keys, addr_overrides, addr_sources)
-                prev_targets = targets
+            await _config_scan_once(app, state, scan_configs, build_name_to_target_map)
         except Exception:
             logger.exception("Error in config scanner")
+
+
+def _config_signature(config_dir: str) -> tuple[tuple[str, int, int], ...]:
+    """Cheap change detector for the YAML tree: (relpath, mtime_ns, size).
+
+    Covers targets *and* the files they pull in (secrets, includes,
+    packages), so a content-only edit — e.g. a new ``manual_ip`` — is seen
+    without re-running full validation every 30 s. Skips ESPHome's build
+    dirs and the archive.
+    """
+    out: list[tuple[str, int, int]] = []
+    for root, dirs, files in os.walk(config_dir):
+        dirs[:] = [d for d in dirs if d not in (".esphome", ".archive", ".git")]
+        for name in files:
+            if not name.endswith((".yaml", ".yml")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            out.append((os.path.relpath(path, config_dir), st.st_mtime_ns, st.st_size))
+    return tuple(sorted(out))
+
+
+async def _config_scan_once(
+    app: web.Application,
+    state: dict[str, Any],
+    scan_configs: Any,
+    build_name_to_target_map: Any,
+) -> None:
+    """One config-scanner pass: reseed the poller when targets or YAML content change.
+
+    Comparing target names alone missed content-only edits, so a device's
+    edited static IP never reached ``update_compile_targets`` until a
+    restart (#171 follow-up).
+    """
+    cfg: AppConfig = app["config"]
+    device_poller = app.get("device_poller")
+    loop = asyncio.get_running_loop()
+    targets = await loop.run_in_executor(None, scan_configs, cfg.config_dir)
+    signature = await loop.run_in_executor(None, _config_signature, cfg.config_dir)
+    prev_targets = state.get("targets", [])
+    if targets == prev_targets and signature == state.get("signature"):
+        return
+    if targets != prev_targets:
+        logger.info("Config change detected: %d targets (was %d)", len(targets), len(prev_targets))
+    else:
+        logger.info("Config content changed — reseeding device poller")
+    if device_poller:
+        name_map, enc_keys, addr_overrides, addr_sources = await loop.run_in_executor(
+            None, build_name_to_target_map, cfg.config_dir, targets,
+        )
+        device_poller.update_compile_targets(targets, name_map, enc_keys, addr_overrides, addr_sources)
+    state["targets"] = targets
+    state["signature"] = signature
 
 
 async def _legacy_schedule_checker_removed() -> None:
@@ -1450,7 +1495,11 @@ def create_app() -> web.Application:
     queue = JobQueue(history=job_history)
     queue.load()
 
-    registry = WorkerRegistry()
+    # Workers persist until the operator deletes them from the Workers
+    # tab — an add-on restart restores the list (offline until each
+    # worker's next heartbeat) instead of starting empty.
+    registry = WorkerRegistry(path="/data/workers.json")
+    registry.load()
 
     # SP.8: device_poll_interval is now settings-driven. Pass the
     # current value as the initial interval; DevicePoller re-reads
@@ -1769,6 +1818,10 @@ def create_app() -> web.Application:
                 except asyncio.CancelledError:
                     pass
 
+        # Flush the latest heartbeat timestamps so "offline for" is
+        # accurate after the restart (heartbeat saves are throttled).
+        registry.save()
+
         # #87: stop APScheduler
         import scheduler as scheduler_module  # noqa: PLC0415
         scheduler_module.stop()
@@ -1809,7 +1862,49 @@ def create_app() -> web.Application:
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+def bind_conflict_message(port: int) -> str:
+    """Explain an ``EADDRINUSE`` on *port* in terms a user can act on (#114).
+
+    The bind failure is raised out of ``web.run_app`` *after* aiohttp has
+    already run the ``on_shutdown`` handlers, so the log ends with a
+    tidy-looking shutdown sequence (scheduler stopped, mDNS unregistered,
+    poller stopped) and only then the traceback. Reporters read that as
+    "something told the add-on to stop" and go looking in the wrong place
+    — #114 took four rounds of back-and-forth to land on the real cause.
+
+    The port is not user-changeable under Supervisor: ``ingress_port`` in
+    ``config.yaml`` is read once at add-on install and the server has to
+    bind exactly it or Ingress breaks. The port field in the add-on's
+    Configuration tab only relabels the host-side mapping, which does
+    nothing here because the add-on runs with ``host_network: true``.
+    Saying so up front stops the next reporter from "fixing" it there.
+    """
+    return (
+        f"Cannot bind to port {port} — address already in use. Fleet for ESPHome "
+        f"runs on the host network, so any other process holding {port} blocks it. "
+        "The most common culprit is the OpenThread Border Router add-on, which is "
+        "also host-networked and binds this port "
+        "(`ha addons stop core_openthread_border_router` to check). "
+        "Changing the port in this add-on's Configuration tab will NOT help — "
+        "Home Assistant Ingress pins the port the server binds inside the "
+        "container. Free the port on the host instead. "
+        "Note: the shutdown messages logged just above are this process cleaning "
+        "up after the failed bind, not a stop request."
+    )
+
+
+def run_server(app: web.Application, port: int) -> None:
+    """Serve *app* on *port*, turning a port clash into a readable error (#114)."""
+    try:
+        web.run_app(app, host="0.0.0.0", port=port)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            logger.critical("%s", bind_conflict_message(port))
+            sys.exit(1)
+        raise
+
+
 if __name__ == "__main__":
     cfg = AppConfig.load()
     app = create_app()
-    web.run_app(app, host="0.0.0.0", port=cfg.port)
+    run_server(app, cfg.port)

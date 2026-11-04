@@ -240,24 +240,35 @@ rules:
       and `async_step_hassio` handles Supervisor-delivered discovery.
 
   docs-data-update:
-    status: todo
+    status: done
     comment: >
-      Add to `DOCS.md` → Integration — explain that the coordinator
-      polls every 30s and that clicking *Reload* on the integration
-      card triggers an immediate refresh.
+      `DOCS.md` → The Home Assistant integration → How data updates.
+      States the 30s poll, that there is no push channel, that entity
+      values can trail the Web UI by up to one interval, that compile
+      events are derived from the poll (and so cannot be missed by a
+      short build), and that *Reload* on the integration card forces
+      an immediate refresh.
 
   docs-examples:
-    status: todo
+    status: done
     comment: >
-      Automation examples covered in `DOCS.md` → Integration but not
-      formalised per the gold-rule shape. Low priority.
+      `DOCS.md` → The Home Assistant integration → Examples. Three
+      copy-pasteable automations against real entities: pending
+      firmware update -> notification, scheduled
+      `esphome_fleet.compile`, and worker-offline -> notification
+      (with the `for:` guard the heartbeat window needs). No
+      blueprints published yet; contributions noted as welcome.
 
   docs-known-limitations:
-    status: todo
+    status: done
     comment: >
-      Known limitations (HA restart after integration upgrade,
-      Supervisor-digest pinning gap) are covered but not under a
-      single "Known limitations" heading in `DOCS.md`.
+      `DOCS.md` → The Home Assistant integration → Known limitations.
+      Single heading covering the HA-restart-after-integration-upgrade
+      requirement, the 30s data lag, the 30s worker heartbeat window,
+      factory-vs-OTA not being surfaced on the Update entity, the HA
+      Core >= 2024.11 floor and why it is not in `manifest.json`, the
+      Supervisor `@sha256:` digest-pinning gap, and the first-pass
+      scope of the AppArmor profile (pointing at SECURITY.md).
 
   docs-supported-devices:
     status: exempt
@@ -274,11 +285,13 @@ rules:
       What's on the Web UI.
 
   docs-troubleshooting:
-    status: todo
+    status: done
     comment: >
-      Common issues (add-on URL mismatch, token rotation, Supervisor
-      discovery stuck) are covered in the add-on's DOCS but not under
-      a dedicated troubleshooting section in the integration docs.
+      `DOCS.md` → Troubleshooting, in the symptom -> cause -> fix shape
+      the rule asks for: Reconfigure prompt, entities stuck
+      unavailable, discovery never firing (mDNS across subnets),
+      repeated reauth, and the post-version-change compile failure
+      that #247 fixed.
 
   docs-use-cases:
     status: done
@@ -316,11 +329,14 @@ rules:
       operationally useful out of the box.
 
   entity-translations:
-    status: todo
+    status: done
     comment: >
-      Entity names use `_attr_has_entity_name = True` but haven't
-      been moved to `translations/en.json` → `entity.*.*.name`.
-      Planned follow-up.
+      All 22 entity names across the five platforms moved from
+      `_attr_name` to `_attr_translation_key`, with
+      `entity.<platform>.<key>.name` populated in `strings.json` and
+      mirrored to `translations/en.json`. Names render identically to
+      before; they are now localizable and appear as defaults in the
+      Customize dialog.
 
   exception-translations:
     status: done

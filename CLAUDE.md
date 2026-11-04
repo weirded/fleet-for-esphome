@@ -26,7 +26,7 @@ Component responsibilities:
 - `main.py` — app setup, auth middleware, background loops (timeout checker, HA entity poller, PyPI version refresher), HA Ingress `X-Ingress-Path` injection.
 - `job_queue.py` — in-memory job queue persisted to `/data/queue.json`. State machine: `PENDING → WORKING → SUCCESS | FAILED | TIMED_OUT`. Jobs retry up to 3 times before permanent failure. On server restart, `WORKING` jobs reset to `PENDING`. Loader recovers gracefully from malformed/truncated queue files.
 - `scanner.py` — discovers `.yaml` targets in `/config/esphome/`. `create_bundle()` produces a tar.gz of the full config directory (including `secrets.yaml`, needed for ESPHome's `!secret` resolution). **ESPHome is NOT bundled in the server Docker image (SE.1–SE.10).** At first boot, `ensure_esphome_installed()` lazy-installs the version reported by the HA ESPHome add-on into `/data/esphome-versions/<ver>/` via the shared `VersionManager`. The venv's `site-packages` is prepended to `sys.path` so `from esphome.* import ...` works; the binary at `<venv>/bin/esphome` is used by `/ui/api/validate`. Downstream callers (`_resolve_esphome_config`, `/ui/api/components`, validate) degrade gracefully while the install is in flight — 1–3 min on first boot; subsequent restarts are instant.
-- `registry.py` — in-memory build worker registry (no persistence); workers are "online" if last heartbeat was within `worker_offline_threshold` seconds.
+- `registry.py` — build worker registry, mirrored to `/data/workers.json` so the list survives add-on restarts. Workers are "online" if last heartbeat was within `worker_offline_threshold` seconds. **Lifecycle rule: a worker never leaves the list on its own** — a clean shutdown (`deregister`) just marks it stopped/offline, and only the Workers-tab **Delete** (`DELETE /ui/api/workers/{id}`, offline workers only) removes it. A fresh registration with no `client_id` adopts an offline row with the same hostname instead of creating a duplicate.
 - `device_poller.py` — discovers ESPHome devices via `_esphomelib._tcp` mDNS, polls them via `aioesphomeapi` for running version.
 - `api.py` — worker REST API (register, heartbeat, claim job, submit result, stream log). Parses every request body through the typed pydantic models in `protocol.py`.
 - `ui_api.py` — browser JSON API (targets, devices, workers, queue, compile, cancel).
@@ -57,10 +57,12 @@ Key worker env vars:
 | `HEARTBEAT_INTERVAL` | `10` | Seconds between heartbeats |
 | `JOB_TIMEOUT` | `600` | Compile timeout in seconds |
 | `OTA_TIMEOUT` | `120` | OTA upload timeout in seconds |
+| `OTA_REACHABILITY_CHECK` | `1` (on) | SOTA.5: gates two fallbacks to server-side OTA — a pre-flight TCP probe against the device's OTA port before attempting `esphome run` (on failure, compiles only and asks the server to push centrally), and a last-resort fallback if the probe passed but the local OTA attempt still failed after its retry (e.g. a flaky WiFi link — TCP connects fine but the OTA protocol handshake times out). Same central-push mechanism as Thread/Matter `server_ota` either way. Set to `0`/`false`/`no` to disable both and always attempt OTA locally. |
 | `MAX_ESPHOME_VERSIONS` | `3` | Max cached ESPHome versions on disk |
 | `MAX_PARALLEL_JOBS` | `2` | Concurrent build jobs per worker (0 = paused). Server-spawned local worker defaults to `1` on fresh install unless the user has configured it via the UI (persisted in `/data/local_worker_slots`) — #99. |
 | `HOSTNAME` | system hostname | Worker name shown in UI |
 | `ESPHOME_SEED_VERSION` | — | Pre-install this ESPHome version at startup |
+| `ESPHOME_INSTALL_TIMEOUT` | `300` | Seconds per `pip install esphome==X` attempt. Raise on slow single-board hosts (#193); floored at 60 |
 | `ESPHOME_BIN` | — | Use this binary instead of the version-manager venvs |
 | `HOST_PLATFORM` | — | Override detected OS in UI (e.g. `macOS 15.3 (Apple M1 Pro)`) |
 

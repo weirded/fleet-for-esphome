@@ -20,8 +20,8 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
-async def _enqueue(q: JobQueue, target: str = "device.yaml", *, version: str = "2024.3.1", run_id: str = "run1", timeout: int = 300):
-    return await q.enqueue(target, version, run_id, timeout)
+async def _enqueue(q: JobQueue, target: str = "device.yaml", *, version: str = "2024.3.1", run_id: str = "run1", timeout: int = 300, **kwargs):
+    return await q.enqueue(target, version, run_id, timeout, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +350,67 @@ async def test_persistence_working_resets_to_pending(tmp_queue_file):
     assert len(jobs) == 1
     assert jobs[0].state == JobState.PENDING
     assert jobs[0].assigned_client_id is None
+
+
+async def test_persistence_interrupted_server_ota_marked_failed(tmp_queue_file):
+    """SOTA.2: a server_ota job whose OTA push was still running at shutdown
+    must not come back as a permanently-spinning row.
+
+    The push is an in-process asyncio task with no persisted progress, and
+    the job is already terminal (SUCCESS), so neither the WORKING->PENDING
+    reset nor timeout_checker would ever revisit it. The UI treats
+    success + ota_result=None as in-flight, so left alone it spins forever.
+    """
+    q1 = JobQueue(queue_file=tmp_queue_file)
+    await _enqueue(q1, "thread-device.yaml", server_ota=True)
+    job = await q1.claim_next("client-A")
+    # Worker compiled only; the server OTA push had not reported back yet.
+    await q1.submit_result(job.id, "success", log=None, ota_result=None)
+    mid = q1.get(job.id)
+    assert mid.state == JobState.SUCCESS
+    assert mid.ota_result is None
+
+    # Simulate restart
+    q2 = JobQueue(queue_file=tmp_queue_file)
+    q2.load()
+
+    recovered = q2.get_all()[0]
+    assert recovered.state == JobState.SUCCESS, "compile genuinely did succeed"
+    assert recovered.ota_result == "failed", (
+        "an OTA push lost to a restart must surface as failed, not as "
+        "an in-flight job that never resolves"
+    )
+    assert recovered.status_text is None
+
+
+async def test_persistence_completed_server_ota_untouched(tmp_queue_file):
+    """Complement: a server_ota job whose push already finished must be
+    left exactly as it was — the recovery rule keys on ota_result being
+    unset, not on server_ota alone."""
+    q1 = JobQueue(queue_file=tmp_queue_file)
+    await _enqueue(q1, "thread-device.yaml", server_ota=True)
+    job = await q1.claim_next("client-A")
+    await q1.submit_result(job.id, "success", log=None, ota_result=None)
+    await q1.patch_ota_result(job.id, "success")
+
+    q2 = JobQueue(queue_file=tmp_queue_file)
+    q2.load()
+
+    assert q2.get_all()[0].ota_result == "success"
+
+
+async def test_persistence_non_server_ota_success_untouched(tmp_queue_file):
+    """A plain download-only job is terminal on success with no OTA phase;
+    the recovery rule must not invent a failed OTA for it."""
+    q1 = JobQueue(queue_file=tmp_queue_file)
+    await _enqueue(q1, "device1.yaml", download_only=True)
+    job = await q1.claim_next("client-A")
+    await q1.submit_result(job.id, "success", log=None, ota_result=None)
+
+    q2 = JobQueue(queue_file=tmp_queue_file)
+    q2.load()
+
+    assert q2.get_all()[0].ota_result is None
 
 
 def test_persistence_backwards_compat_old_states(tmp_queue_file):

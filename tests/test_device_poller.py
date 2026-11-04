@@ -755,3 +755,76 @@ def test_cache_load_does_not_restore_ip_or_address_source(tmp_path, monkeypatch)
     # Stable bits ARE restored
     assert dev.running_version == "2026.3.2"
     assert dev.mac_address == "AA:BB:CC:DD:EE:FF"
+
+
+# ---------------------------------------------------------------------------
+# #171 / #197 — YAML address changes must reach the device row
+# ---------------------------------------------------------------------------
+#
+# ``update_compile_targets`` runs on every config rescan, so it is the point
+# where a user's YAML edit should land. It used to apply the YAML-derived
+# address only when the row had none (``if not dev.ip_address``), which meant
+# a row that had ever been populated — by an earlier scan or by mDNS — kept
+# its first address forever. Editing ``wifi.manual_ip.static_ip`` then changed
+# what ``resolve_ota_address`` flashed to while the Devices tab kept showing
+# the old value (#171), and mDNS overwriting the pinned IP kept the UI in
+# permanent disagreement with the address every upload targeted (#197).
+
+def _seed(poller, name: str, addr: str, source: str) -> None:
+    poller.update_compile_targets(
+        [f"{name}.yaml"],
+        name_to_target={name: f"{name}.yaml"},
+        address_overrides={name: addr},
+        address_sources={name: source},
+    )
+
+
+def test_yaml_static_ip_change_updates_existing_device(poller):
+    """#171: re-scanning after a static-IP edit moves the displayed address."""
+    _seed(poller, "porch", "192.168.3.194", "wifi_static_ip")
+    assert poller._devices["porch"].ip_address == "192.168.3.194"
+
+    _seed(poller, "porch", "192.168.3.200", "wifi_static_ip")
+    assert poller._devices["porch"].ip_address == "192.168.3.200"
+    assert poller._devices["porch"].address_source == "wifi_static_ip"
+
+
+def test_yaml_change_overrides_an_mdns_discovered_ip(poller):
+    """A user's explicit YAML address wins over whatever mDNS had found —
+    it is what ``resolve_ota_address`` uses, so the row must agree."""
+    _seed(poller, "porch", "porch.local", "mdns_default")
+    poller._devices["porch"].ip_address = "192.168.3.50"  # as if mDNS resolved it
+    poller._devices["porch"].address_source = "mdns"
+
+    _seed(poller, "porch", "192.168.3.194", "wifi_static_ip")
+    assert poller._devices["porch"].ip_address == "192.168.3.194"
+    assert poller._devices["porch"].address_source == "wifi_static_ip"
+
+
+def test_mdns_default_never_displaces_a_real_discovered_ip(poller):
+    """The guard rail on the fix: ``mdns_default`` is our own
+    ``{name}.local`` guess, not a user choice. It must not overwrite a real
+    IP — that would undo bug #60's fix."""
+    _seed(poller, "porch", "porch.local", "mdns_default")
+    poller._devices["porch"].ip_address = "192.168.3.50"
+    poller._devices["porch"].address_source = "mdns"
+
+    _seed(poller, "porch", "porch.local", "mdns_default")
+    assert poller._devices["porch"].ip_address == "192.168.3.50"
+
+
+def test_unchanged_yaml_address_is_a_no_op(poller):
+    """Repeated rescans with the same YAML must not churn the row."""
+    _seed(poller, "porch", "192.168.3.194", "wifi_static_ip")
+    _seed(poller, "porch", "192.168.3.194", "wifi_static_ip")
+    assert poller._devices["porch"].ip_address == "192.168.3.194"
+
+
+def test_resolve_ota_address_agrees_with_displayed_ip_after_edit(poller):
+    """The whole point of #171: what the UI shows and what OTA targets are
+    the same value once the YAML has been edited."""
+    _seed(poller, "porch", "192.168.3.194", "wifi_static_ip")
+    _seed(poller, "porch", "192.168.3.200", "wifi_static_ip")
+
+    assert poller.resolve_ota_address("porch") == "192.168.3.200"
+    assert poller._devices["porch"].ip_address == poller.resolve_ota_address("porch")

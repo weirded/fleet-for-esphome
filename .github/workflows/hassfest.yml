@@ -12,9 +12,16 @@ name: Hassfest
 #   ha-addon/custom_integration/esphome_fleet/
 # because the add-on's Dockerfile copies it into /config/custom_components/
 # at runtime. hassfest expects to find integrations under
-# ``custom_components/<domain>/``. Before invoking the action we drop
-# a symlink at the canonical path — the action only reads, never
-# writes, so the symlink is safe.
+# ``custom_components/<domain>/``. Before invoking the action we *copy*
+# the integration to the canonical path.
+#
+# It must be a copy, not a symlink. The hassfest action runs inside a
+# Docker container that mounts the workspace at /github/workspace, and a
+# relative symlink (``../ha-addon/...``) stops resolving for its
+# integration scan there — the job failed with the maximally unhelpful
+# ``Error: No integrations found!`` on every push and on the nightly
+# schedule from early August 2026 until this was changed. A copy has no
+# such failure mode. The copy is CI-only scratch and is never committed.
 
 on:
   push:
@@ -32,13 +39,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Expose integration at custom_components/esphome_fleet
         run: |
           mkdir -p custom_components
-          ln -s ../ha-addon/custom_integration/esphome_fleet custom_components/esphome_fleet
-          ls -la custom_components/
+          cp -r ha-addon/custom_integration/esphome_fleet custom_components/esphome_fleet
+          # Fail loudly here rather than letting hassfest report the
+          # generic "No integrations found!" if the layout ever moves.
+          test -f custom_components/esphome_fleet/manifest.json \
+            || { echo "manifest.json missing after copy — integration layout changed?"; exit 1; }
+          ls -la custom_components/esphome_fleet/
 
       - name: Run hassfest
         uses: home-assistant/actions/hassfest@f6f29a7ee3fa0eccadf3620a7b9ee00ab54ec03b # master 2026-04

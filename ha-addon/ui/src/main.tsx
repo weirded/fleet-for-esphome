@@ -14,6 +14,11 @@ import { I18nextProvider } from 'react-i18next'
 import i18n from './i18n'
 import App from './App.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { applyCachedAccentColor } from './lib/accent'
+
+// #150: re-apply the last-known accent before the first paint so a
+// reload doesn't flash the default colour while /ui/api/settings loads.
+applyCachedAccentColor()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

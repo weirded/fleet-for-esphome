@@ -1,9 +1,15 @@
 requests>=2.34.2
 psutil>=7.2.2
-pydantic>=2.13.4
+pydantic>=2.14.2
 # #108 briefly added py-spy here. #189 replaced it with an in-process
 # frame walk (``client.py::_in_process_thread_dump``) — see the same
 # note in ``ha-addon/server/requirements.txt``.
 
 # Transitive of requests/aiohttp; floor bumped to clear PYSEC-2026-215 (fix in 3.15).
-idna>=3.18
+idna>=3.20
+
+# Transitives of requests, pinned old in the lock (refresh-deps.sh runs
+# without --upgrade); floors bumped to clear pip-audit findings
+# (2026-11-04): certifi PYSEC-2026-4320, urllib3 PYSEC-2026-4175/4176/4177.
+certifi>=2026.10.18
+urllib3>=2.8.0

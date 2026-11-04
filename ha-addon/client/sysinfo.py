@@ -202,11 +202,13 @@ def collect_system_info(versions_dir: str = "/esphome-versions") -> dict:
     disk_total: Optional[str] = None
     disk_free: Optional[str] = None
     disk_pct: Optional[int] = None
+    disk_free_bytes: Optional[int] = None
     try:
         du = psutil.disk_usage(versions_dir)
         disk_total = _format_memory(du.total)
         disk_free = _format_memory(du.free)
         disk_pct = round(du.percent)
+        disk_free_bytes = du.free
     except Exception:
         pass
 
@@ -251,6 +253,7 @@ def collect_system_info(versions_dir: str = "/esphome-versions") -> dict:
         "disk_total": disk_total,
         "disk_free": disk_free,
         "disk_used_pct": disk_pct,
+        "disk_free_bytes": disk_free_bytes,
         "cached_targets": cached_targets,
         "cache_size_mb": cache_size_mb,
     }

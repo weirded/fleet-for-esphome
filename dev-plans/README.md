@@ -6,12 +6,11 @@ Roadmap and bug tracking for Fleet for ESPHome, organized by release.
 
 Each WORKITEMS file's first paragraph is the authoritative theme — read the file, not this index.
 
-- **[WORKITEMS-1.7.3.md](WORKITEMS-1.7.3.md)** — **Current release.** Patch fast-follow to 1.7.2: the last two ESPHome 2026.7 toolchain gaps, a dependency sweep, and two build-infrastructure fixes.
-- **[WORKITEMS-1.8.md](WORKITEMS-1.8.md)** — **Next release.** LLM assistance, plus the Honest Gold tier flip + i18n/German carried forward from 1.7.2. Scope untouched by 1.7.3.
-- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — ESPHome dashboard parity.
+- **[WORKITEMS-1.9.md](WORKITEMS-1.9.md)** — **Current release.** ESPHome dashboard parity.
 - **[WORKITEMS-future.md](WORKITEMS-future.md)** — Unscheduled backlog.
 - **[SECURITY_AUDIT.md](SECURITY_AUDIT.md)** — Security audit findings.
 - **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** — Release process.
+- **[status-board.html](status-board.html)** — Rendered mirror of the current release file's *Issue & PR triage* section, published as an Artifact for at-a-glance release state. Derived from the markdown, never the other way round; republish it whenever that section changes.
 
 ## Archive
 
@@ -30,6 +29,8 @@ Historical release plans for versions already shipped. Themes only — details l
 - **[archive/WORKITEMS-1.7.0.md](archive/WORKITEMS-1.7.0.md)** — heffneil-inspired device-management polish + fleet tags & routing.
 - **[archive/WORKITEMS-1.7.1.md](archive/WORKITEMS-1.7.1.md)** — Brand refresh: "ESPHome Fleet" → "Fleet for ESPHome". <!-- br1-allow: rebrand-history pointer -->
 - **[archive/WORKITEMS-1.7.2.md](archive/WORKITEMS-1.7.2.md)** — ESPHome 2026.7 support + polish.
+- **[archive/WORKITEMS-1.7.3.md](archive/WORKITEMS-1.7.3.md)** — ESPHome 2026.7 toolchain fallout + dependency sweep.
+- **[archive/WORKITEMS-1.8.md](archive/WORKITEMS-1.8.md)** — Worker lifecycle, install/toolchain race fixes, ESPHome release sensors, Helm sidecars. The planned LLM-assistance theme did not ship; its items moved to `WORKITEMS-future.md`.
 
 ## How this works
 

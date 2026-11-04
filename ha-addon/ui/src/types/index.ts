@@ -186,6 +186,7 @@ export interface Target {
     ota_result: string | null;
     validate_only: boolean;
     download_only: boolean;
+    server_ota?: boolean;
     /** ``history`` = recorded by this server in SQLite. ``device`` = parsed
      * from the running firmware's ESPHome ``compilation_time`` string
      * (approximate; build-host local time, success state assumed). */
@@ -410,6 +411,9 @@ export interface Job {
    * the "Diff since compile" button in the log modal to open the
    * History panel pre-set to (from=this_hash, to=working tree). */
   config_hash?: string | null;
+  /** Compile run this job belongs to (shared by every job of one
+   * /ui/api/compile POST). #137: lets the UI find the job it just enqueued. */
+  run_id?: string;
   /** Bug #8 (1.6.1): why this worker got the job. One of
    *  "pinned_to_worker" / "only_online_worker" /
    *  "only_eligible_worker" / "fewer_jobs_than_others" /
@@ -425,6 +429,8 @@ export interface Job {
   validate_only?: boolean;
   /** FD.1: compile-and-download mode — skips OTA, binary uploaded to server. */
   download_only?: boolean;
+  /** SOTA.1: compile on worker, OTA pushed from server. Auto-set for Thread devices. */
+  server_ota?: boolean;
   /** FD.1: true once the worker has POSTed the .bin and it's available
    *  from GET /ui/api/jobs/{id}/firmware. Drives the Queue tab's Download
    *  button visibility. */

@@ -71,3 +71,9 @@ skills-lock.json
 # Local deployment scripts
 push-to-hass-4.sh
 
+
+# CI scratch: .github/workflows/hassfest.yml copies the bundled integration
+# to custom_components/esphome_fleet/ so hassfest finds it at the canonical
+# path. Never committed — the real source lives at
+# ha-addon/custom_integration/esphome_fleet/.
+/custom_components/

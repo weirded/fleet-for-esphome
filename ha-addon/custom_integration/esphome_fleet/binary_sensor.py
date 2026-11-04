@@ -3,6 +3,9 @@
 One `BinarySensor` per build worker. `is_on` maps to `worker.online` (as
 reported by the server's registry heartbeat check) and uses HA's
 `connectivity` device class so the UI picks up the right icon + label.
+
+Hub device: `EsphomeUpdateAvailableBinarySensor` (#257) — on when a
+stable ESPHome release newer than Fleet's selected version is on PyPI.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
+from awesomeversion import AwesomeVersion
+from awesomeversion.exceptions import AwesomeVersionException
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,7 +26,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from ._discovery import entity_already_registered
 from .const import DOMAIN
 from .coordinator import EsphomeFleetCoordinator
-from .device import worker_device_info
+from .device import hub_device_info, worker_device_info
 
 
 
@@ -38,6 +43,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: EsphomeFleetCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    # Hub-level — always present.
+    async_add_entities([
+        EsphomeUpdateAvailableBinarySensor(
+            coordinator, entry.entry_id, coordinator.base_url,
+        ),
+    ])
 
     def _discover() -> None:
         # #62: registry-backed check; see sensor.py::async_setup_entry.
@@ -98,7 +110,7 @@ class WorkerOnlineBinarySensor(_WorkerBinarySensorBase):
     # CR.7: promote worker-online to a primary state sensor. Users
     # build automations like "when all build workers are offline, alert
     # me"; DIAGNOSTIC hid it from the default entity picker.
-    _attr_name = "Online"
+    _attr_translation_key = "online"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 
     def __init__(
@@ -129,7 +141,7 @@ class WorkerWorkingBinarySensor(_WorkerBinarySensorBase):
     key (device-class names are HA-side translations).
     """
 
-    _attr_name = "Working"
+    _attr_translation_key = "working"
     _attr_device_class = BinarySensorDeviceClass.RUNNING
 
     def __init__(
@@ -147,3 +159,54 @@ class WorkerWorkingBinarySensor(_WorkerBinarySensorBase):
         if "is_working" in w:
             return bool(w.get("is_working"))
         return int(w.get("active_job_count") or 0) > 0
+
+
+class EsphomeUpdateAvailableBinarySensor(
+    CoordinatorEntity[EsphomeFleetCoordinator], BinarySensorEntity
+):
+    """#257: on when PyPI has a stable ESPHome newer than the selected one.
+
+    Compares the add-on's `latest_stable` (newest non-pre-release on
+    PyPI) against `selected` (the version new compiles use). Turns off
+    again once the user switches Fleet to the new release. A beta
+    selected ahead of the latest stable correctly reads as "off".
+    Unknown (None) while either side is missing or unparsable.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "esphome_update_available"
+    _attr_device_class = BinarySensorDeviceClass.UPDATE
+
+    def __init__(
+        self, coordinator: EsphomeFleetCoordinator, entry_id: str, base_url: str
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry_id = entry_id
+        self._base_url = base_url
+        self._attr_unique_id = f"{entry_id}_esphome_update_available"
+
+    @property
+    def device_info(self):
+        return hub_device_info(self._entry_id, self._base_url)
+
+    @property
+    def _versions(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get("esphome_versions") or {}
+
+    @property
+    def is_on(self) -> bool | None:
+        latest = self._versions.get("latest_stable")
+        selected = self._versions.get("selected")
+        if not latest or not selected or selected == "unknown":
+            return None
+        try:
+            return AwesomeVersion(latest) > AwesomeVersion(selected)
+        except AwesomeVersionException:
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "latest_version": self._versions.get("latest_stable"),
+            "selected_version": self._versions.get("selected"),
+        }

@@ -136,6 +136,80 @@ def test_warm_marker_lives_inside_the_cache(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# #249: warmness keyed on the IDF version ESPHome needs
+# ---------------------------------------------------------------------------
+
+def _fake_venv(tmp_path, stdout: str, rc: int = 0) -> str:
+    """A venv ``bin/`` whose ``python`` prints *stdout* and logs each call."""
+    bin_dir = tmp_path / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    calls = tmp_path / "calls"
+    py = bin_dir / "python"
+    py.write_text(f"#!/bin/sh\necho x >> '{calls}'\necho '{stdout}'\nexit {rc}\n")
+    py.chmod(0o755)
+    return str(bin_dir / "esphome")
+
+
+def _install_idf(root: str, idf_version: str) -> None:
+    _populate_cache(root, idf_version)
+    os.makedirs(os.path.join(root, "penvs", idf_version), exist_ok=True)
+
+
+def test_previous_release_idf_does_not_make_new_release_warm(tmp_path, monkeypatch):
+    """The 2026.10.0 repro: the cache holds 2026.9's IDF 5.5.5 and an
+    ESP8266 build has already written the 2026.10.0 marker, but IDF 5.5.6
+    is not installed. The next ESP32 compile must take the exclusive lock,
+    not race the 5.5.6 download on a shared one."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(client, "_REQUIRED_IDF_VERSIONS", {})
+    root = os.path.join(str(tmp_path), "esphome", "idf")
+    _install_idf(root, "5.5.5")
+    client._mark_idf_warm("2026.10.0")
+    esphome_bin = _fake_venv(tmp_path, "5.5.6")
+
+    assert not client._idf_is_warm("2026.10.0", esphome_bin)
+
+    _install_idf(root, "5.5.6")
+    assert client._idf_is_warm("2026.10.0", esphome_bin)
+
+
+def test_framework_without_penv_is_not_warm(tmp_path, monkeypatch):
+    """The penv is installed after the framework extract; a racing slot
+    that sees only the framework would collide on the pip install."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(client, "_REQUIRED_IDF_VERSIONS", {})
+    _populate_cache(os.path.join(str(tmp_path), "esphome", "idf"), "5.5.6")
+    assert not client._idf_is_warm("2026.10.0", _fake_venv(tmp_path, "5.5.6"))
+
+
+def test_required_idf_version_is_memoised(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_REQUIRED_IDF_VERSIONS", {})
+    esphome_bin = _fake_venv(tmp_path, "5.5.6")
+    assert client._required_idf_version(esphome_bin) == "5.5.6"
+    assert client._required_idf_version(esphome_bin) == "5.5.6"
+    assert (tmp_path / "calls").read_text().count("x") == 1
+
+
+def test_unknown_idf_version_falls_back_to_marker(tmp_path, monkeypatch):
+    """A failed query (custom ESPHOME_BIN, upstream layout change) keeps
+    the pre-#249 marker behaviour rather than refusing to compile."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setattr(client, "_REQUIRED_IDF_VERSIONS", {})
+    esphome_bin = _fake_venv(tmp_path, "Traceback", rc=1)
+    assert client._required_idf_version(esphome_bin) is None
+    assert not client._idf_is_warm("2026.10.0", esphome_bin)
+
+    _populate_cache(os.path.join(str(tmp_path), "esphome", "idf"))
+    client._mark_idf_warm("2026.10.0")
+    assert client._idf_is_warm("2026.10.0", esphome_bin)
+
+
+def test_missing_venv_python_falls_back_to_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_REQUIRED_IDF_VERSIONS", {})
+    assert client._required_idf_version(str(tmp_path / "nope" / "esphome")) is None
+
+
+# ---------------------------------------------------------------------------
 # Self-heal wipe
 # ---------------------------------------------------------------------------
 

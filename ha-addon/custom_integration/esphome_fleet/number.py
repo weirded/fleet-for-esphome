@@ -59,7 +59,7 @@ class WorkerSlotCountNumber(
     CoordinatorEntity[EsphomeFleetCoordinator], NumberEntity
 ):
     _attr_has_entity_name = True
-    _attr_name = "Build slots"
+    _attr_translation_key = "build_slots"
     _attr_icon = "mdi:slot-machine"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = 0

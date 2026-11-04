@@ -45,6 +45,8 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   reporter: reporters,
+  // Per-target artifacts when run from scripts/test-matrix.py in parallel.
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR || 'test-results',
   use: {
     baseURL: process.env.FLEET_URL || process.env.HASS4_URL || 'http://192.168.225.112:8765',
     headless: true,

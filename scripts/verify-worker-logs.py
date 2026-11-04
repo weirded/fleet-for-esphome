@@ -13,7 +13,7 @@ Fleet server and asserts the two duplicate-source regressions from
 
 Usage:
     SERVER_URL=http://hass-4.local:8765 \\
-    ADDON_TOKEN=$(ssh hass-4 'docker exec addon_local_esphome_dist_server cat /data/settings.json' \\
+    ADDON_TOKEN=$(ssh hass-4 'docker exec $(docker ps --filter name=_local_esphome_dist_server --format {{.Names}} | head -1) cat /data/settings.json' \\
                   | python3 -c "import sys,json; print(json.load(sys.stdin)['server_token'])") \\
     scripts/verify-worker-logs.py
 
@@ -58,7 +58,7 @@ def load_config() -> Config:
     if not token:
         print("ERROR: ADDON_TOKEN env var required", file=sys.stderr)
         print(
-            "  hint: ADDON_TOKEN=$(ssh hass-4 'docker exec addon_local_esphome_dist_server cat /data/settings.json'"
+            "  hint: ADDON_TOKEN=$(ssh hass-4 'docker exec $(docker ps --filter name=_local_esphome_dist_server --format {{.Names}} | head -1) cat /data/settings.json'"
             " | python3 -c \"import sys,json; print(json.load(sys.stdin)['server_token'])\")",
             file=sys.stderr,
         )

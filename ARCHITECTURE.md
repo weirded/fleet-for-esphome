@@ -14,10 +14,12 @@ Fleet for ESPHome is a Home Assistant add-on that manages a fleet of ESPHome dev
                  │                                 │
   Web UI  ──────►│  Server (ha-addon/server/)  ◄───│──  Worker(s)
                  │    + built-in local worker      │     (ha-addon/client/)
-                 │                                 │        │
-                 │                                 │        ▼
-                 │                                 │     ESP devices
-                 │                                 │     (OTA over WiFi)
+                 │         │                       │        │
+                 │         │ OTA (Thread/Matter    │        │ OTA (WiFi/Ethernet
+                 │         │  — IPv6 mesh only     │        │  — worker needs
+                 │         │  reachable from HA)   │        │  LAN reach to ESP)
+                 │         ▼                       │        ▼
+                 │    ESP Thread devices           │     ESP devices
 ```
 
 ### Server (`ha-addon/server/`)
@@ -29,7 +31,7 @@ An `aiohttp` async app. It's the only thing users interact with directly; everyt
 - `ui_api.py` — the **browser API** at `/ui/api/*`. Every surface in the web UI (devices, queue, history, settings, versioning) reads from here. Authenticated via Home Assistant Ingress trust — if the request arrived through the Ingress tunnel, it's already HA-authenticated.
 - `job_queue.py` — in-memory job queue persisted to `/data/queue.json`. Drives the `PENDING → WORKING → SUCCESS | FAILED | TIMED_OUT` state machine, retries, coalescing, and cancellation.
 - `scanner.py` — discovers `.yaml` targets in `/config/esphome/`, bundles the config directory for a worker, and lazy-installs the ESPHome version the add-on reports.
-- `registry.py` — tracks connected workers (live heartbeats, active job count, image version, requested slot count). Pure in-memory; no persistence.
+- `registry.py` — tracks build workers (live heartbeats, active job count, image version, requested slot count). Persisted to `/data/workers.json`; entries survive restarts and clean worker shutdowns, and are only removed by an explicit Delete from the Workers tab.
 - `device_poller.py` — discovers ESPHome devices via mDNS and polls them over `aioesphomeapi` for their running firmware version.
 - `git_versioning.py` — the config-versioning engine that landed in 1.6: debounced auto-commit on every user-initiated write, `git mv` on archive/restore, path-traversal-safe wrappers around every write.
 - `job_history.py` — persistent SQLite-backed compile history (JH.* in WORKITEMS-1.6). Survives queue coalescing and Clear.
@@ -39,7 +41,9 @@ An `aiohttp` async app. It's the only thing users interact with directly; everyt
 
 ### Worker (`ha-addon/client/`)
 
-A small synchronous polling loop. Registers with the server, polls for jobs, ensures the correct ESPHome version is installed into its own `/esphome-versions/<version>/` venv cache, extracts the bundle, runs `esphome run`, and OTA-uploads the firmware directly to the target ESP. Heartbeats on a background thread. Because the worker does the OTA upload, it needs network reach to the ESP devices on its own LAN segment — the server doesn't see the device traffic.
+A small synchronous polling loop. Registers with the server, polls for jobs, ensures the correct ESPHome version is installed into its own `/esphome-versions/<version>/` venv cache, extracts the bundle, runs `esphome run`, and OTA-uploads the firmware directly to the target ESP. Heartbeats on a background thread. Because the worker does the OTA upload, it needs network reach to the ESP devices on its own LAN segment.
+
+**Exception — Thread/Matter devices:** Thread devices use an IPv6 mesh that is only reachable from the HA host, not from remote workers on a different subnet. For these targets the worker compiles and uploads the binary to the server (same as the `download_only` path), and then the server performs the OTA push via `esphome upload`. Auto-detected via the `openthread:` block in the device YAML; any worker can claim the compile job.
 
 Workers auto-update the Python source at every heartbeat (the server pushes any source changes that match the worker's `IMAGE_VERSION`). The Docker image itself only refreshes when the operator runs `docker pull`; a minimum-image-version gate on the server refuses source-code pushes to an image that's too old to apply them safely.
 

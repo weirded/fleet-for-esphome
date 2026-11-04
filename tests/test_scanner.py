@@ -11,6 +11,7 @@ import pytest
 
 from scanner import (
     _extract_metadata,
+    _fill_missing_metadata,
     build_name_to_target_map,
     create_bundle,
     create_stub_yaml,
@@ -1673,6 +1674,40 @@ def test_resolve_failure_logs_warning(tmp_path, caplog):
     )
 
 
+def test_resolve_esphome_config_holds_lock_for_entire_validation(tmp_path):
+    """Copilot review finding on PR #133: the non-blocking pre-check used to
+    acquire-then-immediately-release _validator_lock before calling
+    _full_validate_config, which itself acquired the same lock again,
+    blockingly. That left a race window where another thread could grab
+    the lock in between, and this caller would then block anyway --
+    defeating the whole point of checking non-blocking first. The lock
+    must now be held by the caller for the full duration of the call."""
+    from unittest.mock import patch
+    import scanner as scanner_module
+    from scanner import _resolve_esphome_config
+
+    good = tmp_path / "lock_duration_test_device.yaml"
+    good.write_text("esphome:\n  name: device\n")
+
+    lock_state_during_call = {}
+
+    def _fake_full_validate_config(path):
+        lock_state_during_call["locked"] = scanner_module._validator_lock.locked()
+        return {"esphome": {"name": "device"}}
+
+    with patch("scanner._full_validate_config", new=_fake_full_validate_config):
+        result = _resolve_esphome_config(str(tmp_path), "lock_duration_test_device.yaml")
+
+    assert result == {"esphome": {"name": "device"}}
+    assert lock_state_during_call["locked"] is True, (
+        "the lock must be held for the duration of _full_validate_config, "
+        "not released before calling it"
+    )
+    assert not scanner_module._validator_lock.locked(), (
+        "the lock must be released again once validation completes"
+    )
+
+
 # --- Bug #112 — bundle subprocess stderr is clean (no esphome logger noise) -
 
 def test_bundle_subprocess_stderr_does_not_leak_esphome_logger_chatter():
@@ -1713,6 +1748,39 @@ def test_bundle_subprocess_stderr_does_not_leak_esphome_logger_chatter():
         "ESPHome's _LOGGER namespace is leaking through the silencing "
         "in scanner._BUNDLE_SUBPROCESS_SCRIPT — bug #112 regression."
     )
+
+
+def test_bundle_subprocess_refreshes_remote_sources():
+    """#250: the dispatch bundle must let ESPHome refresh remote
+    ``packages:`` / ``external_components:`` per their ``refresh:``.
+
+    With ``skip_external_update=True`` the first clone was frozen forever:
+    hass-4 kept validating KaufHA plugs against a Sep-2026 checkout pinned
+    to a pre-2026.10 component, failing every compile with
+    ``module 'esphome.codegen' has no attribute 'Controller'`` long after
+    upstream shipped the fix.
+    """
+    import subprocess as _sp
+
+    from scanner import _BUNDLE_SUBPROCESS_SCRIPT
+
+    spy = (
+        "import sys, esphome.config as _c\n"
+        "_orig = _c.validate_config\n"
+        "def _spy(*a, **k):\n"
+        "    sys.stderr.write('SKIP=%r\\n' % k.get('skip_external_update', False))\n"
+        "    return _orig(*a, **k)\n"
+        "_c.validate_config = _spy\n"
+    )
+    proc = _sp.run(
+        [sys.executable, "-c", spy + _BUNDLE_SUBPROCESS_SCRIPT, str(FIXTURES / "device1.yaml")],
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    assert proc.returncode == 0, stderr
+    assert "SKIP=False" in stderr, stderr
 
 
 # ---------------------------------------------------------------------------
@@ -1949,3 +2017,72 @@ def test_ensure_esphome_installed_no_longer_refuses_old_versions(monkeypatch):
     _scanner._esphome_install_failed = False
     _scanner.ensure_esphome_installed("2026.3.3", versions_base=Path("/tmp/test_esphome_versions"))
     assert reached["vm"] is True, "ensure_esphome_installed bailed before reaching VersionManager"
+
+
+# ---------------------------------------------------------------------------
+# SOTA.3 — _fill_missing_metadata network_type fallback (d6bc650)
+#
+# get_device_metadata's raw-YAML fallback runs when full ESPHome resolution
+# fails or hasn't finished yet at enqueue time. Without this, a Thread device
+# hitting the fallback path got network_type=None -> server_ota=False -> the
+# worker attempted a direct OTA over an IPv6 mesh it can't reach. Precedence
+# mirrors _extract_metadata: openthread > ethernet > wifi.
+# ---------------------------------------------------------------------------
+
+
+def _blank_fill_meta() -> dict:
+    return {
+        "friendly_name": None,
+        "device_name": None,
+        "device_name_raw": None,
+        "comment": None,
+        "area": None,
+        "project_name": None,
+        "project_version": None,
+        "has_web_server": False,
+        "network_type": None,
+    }
+
+
+def test_fill_missing_metadata_detects_openthread_as_thread():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({"openthread": {}}, result)
+    assert result["network_type"] == "thread"
+
+
+def test_fill_missing_metadata_detects_ethernet():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({"ethernet": {}}, result)
+    assert result["network_type"] == "ethernet"
+
+
+def test_fill_missing_metadata_detects_wifi():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({"wifi": {}}, result)
+    assert result["network_type"] == "wifi"
+
+
+def test_fill_missing_metadata_openthread_takes_precedence():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({"openthread": {}, "ethernet": {}, "wifi": {}}, result)
+    assert result["network_type"] == "thread"
+
+
+def test_fill_missing_metadata_ethernet_takes_precedence_over_wifi():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({"ethernet": {}, "wifi": {}}, result)
+    assert result["network_type"] == "ethernet"
+
+
+def test_fill_missing_metadata_does_not_overwrite_already_resolved_network_type():
+    """Never overwrites a value the full ESPHome resolution already set."""
+    result = _blank_fill_meta()
+    result["network_type"] = "wifi"
+    _fill_missing_metadata({"openthread": {}}, result)
+    assert result["network_type"] == "wifi"
+
+
+def test_fill_missing_metadata_no_network_block_leaves_none():
+    result = _blank_fill_meta()
+    _fill_missing_metadata({}, result)
+    assert result["network_type"] is None

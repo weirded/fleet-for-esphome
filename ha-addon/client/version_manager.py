@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import logging
 import os
 import shutil
@@ -10,6 +12,7 @@ import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,97 @@ if (
     )
 # Minimum free disk percentage before we start evicting versions
 MIN_FREE_DISK_PCT = int(os.environ.get("MIN_FREE_DISK_PCT", "10"))
+
+
+def _install_timeout_from_env() -> int:
+    """Seconds to allow one ``pip install esphome==X`` attempt (#193).
+
+    The 300 s default is sized for "slow ARM host" (see
+    ``VersionManager._PIP_INSTALL_TIMEOUT``), but slow has no upper bound:
+    the reporter of #193 measured ~14 minutes for a full ESPHome install on
+    a Zimaboard, where every attempt hit the wall and the version could
+    never finish installing at all. There is nothing the user can do about
+    that from the UI, so make the ceiling an env var like every other
+    worker knob (``MIN_FREE_DISK_PCT``, ``JOB_TIMEOUT``, …).
+
+    Floor of 60 s: below that even a warm-cache install on a fast host
+    starts flaking, and a too-low value fails in a way that looks like a
+    network problem rather than a misconfiguration. A bad value warns and
+    falls back rather than crashing the worker at import time — this runs
+    before any of the worker's own error handling exists.
+    """
+    raw = os.environ.get("ESPHOME_INSTALL_TIMEOUT")
+    if raw is None or not raw.strip():
+        return 300
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "ESPHOME_INSTALL_TIMEOUT=%r is not an integer — using 300s", raw,
+        )
+        return 300
+    if value < 60:
+        logger.warning(
+            "ESPHOME_INSTALL_TIMEOUT=%ds is below the 60s floor — using 60s", value,
+        )
+        return 60
+    return value
+
+
+ESPHOME_INSTALL_TIMEOUT = _install_timeout_from_env()
+
+
+# pip reports a Python-floor mismatch in two places, and neither one says
+# "your image is too old" — which is what the user actually needs to hear.
+_PY_FLOOR_MARKER = "require a different python version"
+_NO_DIST_MARKER = "no matching distribution found"
+
+
+def diagnose_pip_failure(version: str, stdout: str, stderr: str) -> str | None:
+    """Turn a pip install failure into one actionable sentence, or None (#240).
+
+    #240 was reported as "Latest version not available": the UI offered
+    ESPHome 2026.7.3, every job pinned to it died, and the log was a
+    200-version wall ending in ``No matching distribution found for
+    esphome==2026.7.3``. Read literally that says the release doesn't exist.
+    It does — pip had silently filtered it out because ESPHome 2026.7 raised
+    its Python floor to 3.12 and the shipped worker image was still on 3.11,
+    so every 2026.7.x candidate was excluded before the version match ran
+    and the list simply stopped at 2026.6.5.
+
+    The underlying incompatibility was fixed in 1.7.2 (images moved to
+    Python 3.13), but the *message* is what made it take a round-trip to
+    diagnose, and the failure mode recurs on its own schedule: ESPHome will
+    raise its floor again, and a worker running a stale image will hit this
+    exact wall each time. Name the cause and the fix instead of pasting the
+    version list. Same reasoning as #114's bind-conflict message.
+
+    Returns None for ordinary failures (typo'd version, unreachable index),
+    which keep the existing generic error — a wrong guess here would be
+    worse than no guess.
+    """
+    blob = f"{stdout}\n{stderr}".lower()
+    if _NO_DIST_MARKER not in blob:
+        return None
+    running = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if _PY_FLOOR_MARKER in blob:
+        return (
+            f"ESPHome {version} cannot be installed: it requires a newer "
+            f"Python than this worker's {running}. pip excluded every "
+            f"matching release before looking at the version number, which "
+            f"is why the log says 'no matching distribution' for a release "
+            f"that does exist. Update the worker's Docker image (or the "
+            f"add-on, for the built-in worker) — the Python version is "
+            f"baked into the image and cannot be changed at runtime. "
+            f"Pinning an older ESPHome version is the workaround (#240)."
+        )
+    return (
+        f"ESPHome {version} was not found on the package index. Check the "
+        f"version exists on PyPI and that this worker can reach the index "
+        f"(running Python {running}); if the release is recent, an outdated "
+        f"worker image whose Python is below ESPHome's floor produces this "
+        f"same message (#240)."
+    )
 
 # #119 (round 2): the in-container local worker shares
 # ``/data/esphome-versions/`` with the server's lazy-installed bundling
@@ -135,7 +229,59 @@ class VersionManager:
         return self._venv_path(version) / "bin" / "esphome"
 
     def _is_installed(self, version: str) -> bool:
-        return self._esphome_bin(version).exists()
+        """True if *version*'s venv exists **and** was built by this interpreter.
+
+        #243: checking only that ``bin/esphome`` exists reports a venv built
+        by a *different* Python as installed. That happens in normal
+        operation — the add-on image's Python moves (3.11 → 3.13 in 1.7.2 for
+        ESPHome 2026.7's floor), or a rollback/stale-tag deploy puts an older
+        image on top of a `/data` a newer one wrote. The venv is then
+        unusable: ``scanner._activate_esphome_venv`` looks for
+        ``lib/python{running}/site-packages``, finds only the other version's,
+        logs "venv site-packages missing", and the UI says *"ESPHome X install
+        failed"* — with no reinstall ever attempted, because this function
+        kept insisting it was installed.
+
+        Treating a mismatch as not-installed lets the existing wipe-and-
+        rebuild path in ``_install`` self-heal it, which is the same theme as
+        the partial-venv recovery in PR #251.
+        """
+        if not self._esphome_bin(version).exists():
+            return False
+        return self._venv_matches_running_python(version)
+
+    def _venv_matches_running_python(self, version: str) -> bool:
+        """True if *version*'s venv holds a ``lib/python{M.N}/`` for us.
+
+        ``pyvenv.cfg`` also carries a ``version`` key, but it records the
+        *full* patch version of the interpreter that created the venv
+        (``3.13.1``), while what actually has to match is the ``M.N`` in the
+        ``site-packages`` path — a 3.13.1 → 3.13.2 base-image bump keeps the
+        same ``lib/python3.13/`` and must not force a needless rebuild. So
+        check the directory that gets imported from, not the cfg string.
+
+        Unreadable/absent ``lib/`` is treated as a mismatch: a venv we can't
+        verify is one we should rebuild rather than trust.
+        """
+        want = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        lib_dir = self._venv_path(version) / "lib"
+        try:
+            names = [d.name for d in lib_dir.iterdir() if d.is_dir()]
+        except OSError:
+            logger.warning(
+                "ESPHome %s: cannot read %s to verify the venv interpreter — "
+                "treating as not installed so it gets rebuilt", version, lib_dir,
+            )
+            return False
+        if want in names:
+            return True
+        logger.warning(
+            "ESPHome %s venv was built by a different Python (found %s, this "
+            "image runs %s) — rebuilding. This is expected after an add-on "
+            "image update that changed the Python version (#243).",
+            version, ", ".join(sorted(names)) or "nothing", want,
+        )
+        return False
 
     def _evict_lru(self, keep_version: str | None = None) -> bool:
         """Remove the least-recently-used version from disk and LRU cache.
@@ -191,7 +337,9 @@ class VersionManager:
     # Bug #127: default (None / unbounded) caused "uv installation via pip
     # timed out" reports on HAOS 2026.4.4 — pip's own socket-level timeout is
     # separate from this subprocess timeout, so this bounds the whole install.
-    _PIP_INSTALL_TIMEOUT = 300  # seconds
+    # #193: raise it with ``ESPHOME_INSTALL_TIMEOUT`` when 300 s isn't enough
+    # (slow single-board hosts have been measured at ~14 min).
+    _PIP_INSTALL_TIMEOUT = ESPHOME_INSTALL_TIMEOUT  # seconds
 
     def _install(self, version: str) -> None:
         """Create a venv and install esphome==version into it.
@@ -202,15 +350,40 @@ class VersionManager:
         venv_dir = self._venv_path(version)
         logger.info("Installing esphome==%s into %s", version, venv_dir)
 
-        # Create venv
-        subprocess.run(
-            [sys.executable, "-m", "venv", str(venv_dir)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # Wipe any stale/partial venv from a previous failed attempt so we
+        # start clean (otherwise a venv missing bin/pip causes FileNotFoundError
+        # on every subsequent restart until /data is cleared).
+        if venv_dir.exists():
+            logger.info("Removing stale venv at %s before reinstall", venv_dir)
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+
+        venv_cmd = [sys.executable, "-m", "venv", str(venv_dir)]
+        logger.info("Running: %s", " ".join(venv_cmd))
+        try:
+            subprocess.run(
+                venv_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            logger.error(
+                "python -m venv failed (exit %d):\nstderr: %s\nstdout: %s",
+                exc.returncode, stderr, stdout,
+            )
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+            raise
 
         pip = venv_dir / "bin" / "pip"
+        if not pip.exists():
+            shutil.rmtree(str(venv_dir), ignore_errors=True)
+            raise RuntimeError(
+                f"venv created at {venv_dir} but bin/pip is missing — "
+                "ensurepip may be unavailable in this Python installation"
+            )
+
         install_cmd: list[str] = [
             str(pip), "install", "--no-cache-dir", f"esphome=={version}",
         ]
@@ -257,6 +430,12 @@ class VersionManager:
             # Non-zero exit is a hard failure (bad version, bad index, etc.) —
             # don't retry, it won't help.
             shutil.rmtree(str(venv_dir), ignore_errors=True)
+            diagnosis = diagnose_pip_failure(
+                version, result.stdout or "", result.stderr or "",
+            )
+            if diagnosis:
+                logger.error("%s", diagnosis)
+                raise RuntimeError(f"{diagnosis}\n\n{stderr_excerpt}")
             raise RuntimeError(
                 f"pip install esphome=={version} failed (exit {result.returncode}):\n"
                 f"{stderr_excerpt}"
@@ -269,6 +448,46 @@ class VersionManager:
             f"(network slow or PyPI unreachable). "
             f"Retry the compile or check the worker host's network."
         ) from last_exc
+
+    @contextlib.contextmanager
+    def _install_file_lock(self, version: str) -> Iterator[None]:
+        """Cross-process exclusive lock around installing *version* (#317).
+
+        ``self._installing`` only dedupes threads sharing one
+        VersionManager. The add-on runs several: the server builds a fresh
+        one per ``ensure_esphome_installed`` call (UI version change + HA
+        add-on version poller fired 8 s apart on an ESPHome bump), and the
+        in-container local worker has its own in another process — all
+        on the same ``versions_base``. Unserialised, the second install's
+        "remove stale venv" wiped the first one mid-pip (``certifi/cacert.pem``
+        missing, ``ensurepip`` failing) and the UI showed "install failed".
+
+        ``flock`` conflicts between separate ``open()`` calls even within
+        one process, so this covers both cases. Lock files persist (handles
+        only). Failure to lock degrades to the old unserialised behaviour.
+        """
+        lock_path = self._base / f".install-{version}.lock"
+        fp = None
+        try:
+            self._base.mkdir(parents=True, exist_ok=True)
+            fp = open(lock_path, "w", encoding="utf-8")
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        except OSError as exc:
+            logger.warning(
+                "Could not acquire install lock %s (%s) — proceeding unserialised",
+                lock_path, exc,
+            )
+            if fp is not None:
+                fp.close()
+                fp = None
+        try:
+            yield
+        finally:
+            if fp is not None:
+                try:
+                    fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+                finally:
+                    fp.close()
 
     # ------------------------------------------------------------------
     # Public API
@@ -322,7 +541,16 @@ class VersionManager:
             # We own the install — run outside the lock (slow subprocess)
             assert install_event is not None
             try:
-                self._install(version)
+                with self._install_file_lock(version):
+                    # Another process (or VersionManager) may have finished
+                    # this install while we waited on the lock (#317).
+                    if self._is_installed(version):
+                        logger.info(
+                            "esphome==%s was installed concurrently by another "
+                            "process — reusing it", version,
+                        )
+                    else:
+                        self._install(version)
                 with self._lock:
                     self._lru[version] = self._venv_path(version)
                     self._installing.pop(version, None)

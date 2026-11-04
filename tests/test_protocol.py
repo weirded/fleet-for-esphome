@@ -96,6 +96,19 @@ class TestRoundTrip:
         )
         assert JobAssignment.model_validate(msg.model_dump()) == msg
 
+    def test_job_assignment_server_ota_roundtrip(self) -> None:
+        msg = JobAssignment(
+            job_id="j1",
+            target="thread-device.yaml",
+            esphome_version="2026.4.3",
+            bundle_b64="AAAA",
+            server_ota=True,
+            ota_address="fd00::1",
+        )
+        d = msg.model_dump()
+        assert d["server_ota"] is True
+        assert JobAssignment.model_validate(d) == msg
+
     def test_job_result_submission_success(self) -> None:
         msg = JobResultSubmission(status="success", ota_result="success")
         assert JobResultSubmission.model_validate(msg.model_dump()) == msg
@@ -165,6 +178,17 @@ class TestRoundTrip:
         assert msg.disk_usage_bytes is None
         assert msg.disk_quota_bytes is None
         assert msg.last_eviction_freed_bytes is None
+
+    def test_system_info_disk_free_bytes_roundtrip(self) -> None:
+        """Absolute-floor fix: raw free-space bytes backing disk_used_pct."""
+        msg = SystemInfo(disk_free_bytes=1176 * 1024 ** 3)
+        d = msg.model_dump()
+        assert d["disk_free_bytes"] == 1176 * 1024 ** 3
+        assert SystemInfo.model_validate(d) == msg
+
+    def test_system_info_disk_free_bytes_default_none(self) -> None:
+        msg = SystemInfo()
+        assert msg.disk_free_bytes is None
 
     def test_heartbeat_response_stream_logs_omitted_is_none(self) -> None:
         # No flag = no change from the worker's current state. Default must
@@ -288,6 +312,15 @@ class TestBackwardCompatibility:
         assert msg.ok is True
         assert msg.server_client_version is None
         assert msg.image_upgrade_required is None
+
+    def test_job_assignment_server_ota_defaults_false(self) -> None:
+        msg = JobAssignment.model_validate({
+            "job_id": "j1",
+            "target": "t.yaml",
+            "esphome_version": "2026.3.0",
+            "bundle_b64": "",
+        })
+        assert msg.server_ota is False
 
 
 # ---------------------------------------------------------------------------

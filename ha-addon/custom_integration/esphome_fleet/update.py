@@ -63,7 +63,7 @@ class TargetFirmwareUpdate(CoordinatorEntity[EsphomeFleetCoordinator], UpdateEnt
     """Update entity for a single managed ESPHome target."""
 
     _attr_has_entity_name = True
-    _attr_name = "Firmware"
+    _attr_translation_key = "firmware"
     _attr_supported_features = UpdateEntityFeature.INSTALL
     _attr_title = "ESPHome Firmware"
 

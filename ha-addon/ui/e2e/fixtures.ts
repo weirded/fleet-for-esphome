@@ -634,6 +634,8 @@ export async function mockApi(page: Page) {
     // to pre-#145; the EnumRow under Display lets the user pick
     // Small/Normal/Large.
     font_size: 'normal',
+    // #150: accent-colour preset. ``'indigo'`` is the pre-#150 accent.
+    accent_color: 'indigo',
   };
   await page.route('**/ui/api/settings', async (route) => {
     const method = route.request().method();

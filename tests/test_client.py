@@ -25,12 +25,21 @@ def vm(tmp_path):
 
 
 def _add_fake_version(tmp_path: Path, version: str) -> None:
-    """Create a fake installed version directory with a stub esphome binary."""
+    """Create a fake installed version directory with a stub esphome binary.
+
+    Includes ``lib/python{M.N}/site-packages`` for the *running* interpreter.
+    A real venv always has it — it is what ``scanner._activate_esphome_venv``
+    prepends to ``sys.path`` — and since #243 ``_is_installed`` verifies the
+    venv was built by this Python, so a fixture without it represents a venv
+    that could not actually work.
+    """
     venv = tmp_path / version / "bin"
     venv.mkdir(parents=True, exist_ok=True)
     esphome = venv / "esphome"
     esphome.write_text("#!/bin/sh\necho fake esphome\n")
     esphome.chmod(0o755)
+    running = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    (tmp_path / version / "lib" / running / "site-packages").mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +510,10 @@ def test_run_job_ota_retry_uses_upload_without_no_logs(tmp_path, monkeypatch):
     monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
     # Skip the OTA diagnostics network calls on failure path.
     monkeypatch.setattr(client_module, "_ota_network_diagnostics", lambda *a, **k: "")
+    # SOTA.5: this test is about the OTA-failure retry, not the pre-flight
+    # reachability gate — stub it reachable so run_job takes the normal
+    # `esphome run` path instead of doing a real TCP probe against 10.0.0.5.
+    monkeypatch.setattr(client_module, "_check_ota_reachable", lambda *a, **k: (True, ""))
     # Skip the 5-second sleep between compile and retry.
     monkeypatch.setattr(client_module.time, "sleep", lambda _s: None)
 
@@ -550,6 +563,463 @@ def test_run_job_ota_retry_uses_upload_without_no_logs(tmp_path, monkeypatch):
     # The result submission records the OTA retry succeeded.
     assert submitted[-1][0] == "success"
     assert submitted[-1][1] == "success"
+
+
+# ---------------------------------------------------------------------------
+# SOTA.5 — worker-side pre-flight reachability check + dynamic fallback to
+# server-side OTA when this worker can't reach the device.
+# ---------------------------------------------------------------------------
+
+def test_run_job_last_resort_fallback_when_local_ota_fails_after_retry(tmp_path, monkeypatch):
+    """SOTA.5 last-resort: pre-flight reachability check passes, but the
+    actual local OTA attempt fails even after the existing retry (e.g. a
+    flaky WiFi link where TCP connects fine but the OTA protocol times
+    out). If the firmware archived successfully, the worker must ask the
+    server to push centrally instead of just failing the job."""
+    import client as client_module
+
+    _add_fake_version(tmp_path, "2024.3.1")
+    monkeypatch.setattr(client_module, "_ESPHOME_VERSIONS_DIR", str(tmp_path))
+
+    commands: list[list[str]] = []
+
+    def fake_run_subprocess(cmd, cwd, timeout, label, env=None, job_id=None):
+        commands.append(list(cmd))
+        if label == "compile+OTA":
+            return (
+                "INFO Successfully compiled program.\nERROR Error resolving OTA target: Connect failed\n",
+                False,
+            )
+        return ("still failed", False)
+
+    monkeypatch.setattr(client_module, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(client_module, "_flush_log_text", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_log_invocation", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_ota_network_diagnostics", lambda *a, **k: "")
+    monkeypatch.setattr(client_module, "_check_ota_reachable", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(client_module.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(client_module, "_archive_firmware_to_server", lambda *a, **k: True)
+
+    submitted: list[dict] = []
+
+    def fake_submit(job_id, status, log=None, ota_result=None, requires_server_ota=False):
+        submitted.append({
+            "status": status, "ota_result": ota_result,
+            "requires_server_ota": requires_server_ota,
+        })
+
+    monkeypatch.setattr(client_module, "_submit_result", fake_submit)
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=3)
+    job = {
+        "job_id": "j1",
+        "target": "dev.yaml",
+        "esphome_version": "2024.3.1",
+        "bundle_b64": _make_bundle_b64(),
+        "timeout_seconds": 60,
+        "ota_only": False,
+        "validate_only": False,
+        "ota_address": "10.0.0.5",
+    }
+
+    client_module.run_job("client-1", job, vm, worker_id=1)
+
+    assert len(commands) == 2  # compile+OTA, then OTA retry
+    assert submitted[-1]["status"] == "success"
+    assert submitted[-1]["ota_result"] is None
+    assert submitted[-1]["requires_server_ota"] is True
+
+
+def test_run_job_no_last_resort_fallback_when_archive_fails(tmp_path, monkeypatch):
+    """If archiving the firmware to the server fails, requires_server_ota
+    must NOT be set — the server would have nothing to push, and the job
+    would be stuck showing an in-progress state forever."""
+    import client as client_module
+
+    _add_fake_version(tmp_path, "2024.3.1")
+    monkeypatch.setattr(client_module, "_ESPHOME_VERSIONS_DIR", str(tmp_path))
+
+    def fake_run_subprocess(cmd, cwd, timeout, label, env=None, job_id=None):
+        if label == "compile+OTA":
+            return (
+                "INFO Successfully compiled program.\nERROR Error resolving OTA target: Connect failed\n",
+                False,
+            )
+        return ("still failed", False)
+
+    monkeypatch.setattr(client_module, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(client_module, "_flush_log_text", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_log_invocation", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_ota_network_diagnostics", lambda *a, **k: "")
+    monkeypatch.setattr(client_module, "_check_ota_reachable", lambda *a, **k: (True, ""))
+    monkeypatch.setattr(client_module.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(client_module, "_archive_firmware_to_server", lambda *a, **k: False)
+
+    submitted: list[dict] = []
+
+    def fake_submit(job_id, status, log=None, ota_result=None, requires_server_ota=False):
+        submitted.append({
+            "status": status, "ota_result": ota_result,
+            "requires_server_ota": requires_server_ota,
+        })
+
+    monkeypatch.setattr(client_module, "_submit_result", fake_submit)
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=3)
+    job = {
+        "job_id": "j1",
+        "target": "dev.yaml",
+        "esphome_version": "2024.3.1",
+        "bundle_b64": _make_bundle_b64(),
+        "timeout_seconds": 60,
+        "ota_only": False,
+        "validate_only": False,
+        "ota_address": "10.0.0.5",
+    }
+
+    client_module.run_job("client-1", job, vm, worker_id=1)
+
+    assert submitted[-1]["status"] == "success"
+    assert submitted[-1]["ota_result"] == "failed"
+    assert submitted[-1]["requires_server_ota"] is False
+
+
+def test_run_job_no_last_resort_fallback_when_reachability_check_disabled(tmp_path, monkeypatch):
+    """OTA_REACHABILITY_CHECK=0 must disable the last-resort fallback too,
+    not just the pre-flight probe — it's the single escape hatch for the
+    whole SOTA.5 behavior."""
+    import client as client_module
+
+    _add_fake_version(tmp_path, "2024.3.1")
+    monkeypatch.setattr(client_module, "_ESPHOME_VERSIONS_DIR", str(tmp_path))
+    monkeypatch.setattr(client_module, "OTA_REACHABILITY_CHECK", False)
+
+    def fake_run_subprocess(cmd, cwd, timeout, label, env=None, job_id=None):
+        if label == "compile+OTA":
+            return (
+                "INFO Successfully compiled program.\nERROR Error resolving OTA target: Connect failed\n",
+                False,
+            )
+        return ("still failed", False)
+
+    monkeypatch.setattr(client_module, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(client_module, "_flush_log_text", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_log_invocation", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_ota_network_diagnostics", lambda *a, **k: "")
+    monkeypatch.setattr(client_module.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(client_module, "_archive_firmware_to_server", lambda *a, **k: True)
+
+    submitted: list[dict] = []
+
+    def fake_submit(job_id, status, log=None, ota_result=None, requires_server_ota=False):
+        submitted.append({
+            "status": status, "ota_result": ota_result,
+            "requires_server_ota": requires_server_ota,
+        })
+
+    monkeypatch.setattr(client_module, "_submit_result", fake_submit)
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=3)
+    job = {
+        "job_id": "j1",
+        "target": "dev.yaml",
+        "esphome_version": "2024.3.1",
+        "bundle_b64": _make_bundle_b64(),
+        "timeout_seconds": 60,
+        "ota_only": False,
+        "validate_only": False,
+        "ota_address": "10.0.0.5",
+    }
+
+    client_module.run_job("client-1", job, vm, worker_id=1)
+
+    assert submitted[-1]["status"] == "success"
+    assert submitted[-1]["ota_result"] == "failed"
+    assert submitted[-1]["requires_server_ota"] is False
+
+
+def _make_bundle_b64(yaml_content: bytes = b"esphome:\n  name: dev\n", filename: str = "dev.yaml") -> str:
+    import base64
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(name=filename)
+        info.size = len(yaml_content)
+        tar.addfile(info, io.BytesIO(yaml_content))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def test_detect_ota_ports_honors_explicit_override(tmp_path):
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text("esphome:\n  name: dev\nota:\n  platform: esphome\n  port: 4444\n")
+    assert client_module._detect_ota_ports(str(target)) == [4444]
+
+
+def test_detect_ota_ports_defaults_to_common_ports_without_override(tmp_path):
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text("esphome:\n  name: dev\n")
+    assert client_module._detect_ota_ports(str(target)) == [3232, 8266]
+
+
+def test_check_ota_reachable_true_when_a_port_accepts_connection(tmp_path, monkeypatch):
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text("esphome:\n  name: dev\n")
+
+    def fake_create_connection(addr, timeout):
+        assert addr == ("10.0.0.5", 3232)
+        return MagicMock(__enter__=MagicMock(), __exit__=MagicMock())
+
+    monkeypatch.setattr(client_module.socket, "create_connection", fake_create_connection)
+    reachable, log_line = client_module._check_ota_reachable("10.0.0.5", str(target))
+    assert reachable is True
+    assert "10.0.0.5:3232" in log_line
+
+
+def test_check_ota_reachable_false_when_every_port_refused(tmp_path, monkeypatch):
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text("esphome:\n  name: dev\n")
+
+    def fake_create_connection(addr, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(client_module.socket, "create_connection", fake_create_connection)
+    reachable, log_line = client_module._check_ota_reachable("10.0.0.5", str(target))
+    assert reachable is False
+    assert "not reachable" in log_line
+
+
+def test_detect_ota_ports_ignores_unrelated_port_key_after_ota_block(tmp_path):
+    """Regression: a `web_server: port: 80` block declared after `ota:`
+    in the file must NOT be picked up as the OTA port override — the
+    naive `content.split("ota:")[1]` + first-"port:" regex used to grab
+    it. https://... real-world hit: waterpump-pool, 2026-08-06."""
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n  - platform: esphome\n"
+        "web_server:\n  port: 80\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [3232, 8266]
+
+
+def test_detect_ota_ports_honors_list_form_ota_block(tmp_path):
+    """Current ESPHome schema: `ota:` is a list of platform dicts."""
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n  - platform: esphome\n    port: 3333\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [3333]
+
+
+def test_detect_ota_ports_returns_every_declared_platform_port(tmp_path):
+    """A multi-platform `ota:` block must yield every port, not just the first.
+
+    ESPHome 2024.6+ made `ota:` a list of platforms, so declaring the
+    `web_server` OTA platform alongside the `esphome` one is legal and not
+    unusual. Returning only the first match makes the answer depend on
+    which platform the user happened to write first — the same "first
+    `port:` wins" bug this function was rewritten to fix, just scoped to
+    inside the block rather than the whole file. Picking 8080 here and
+    finding nothing listening produces a false "unreachable" verdict and
+    an unnecessary hand-off to server-side OTA.
+
+    The caller probes the list in order and stops at the first port that
+    answers, so returning both is strictly better than guessing.
+    """
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n"
+        "  - platform: web_server\n    port: 8080\n"
+        "  - platform: esphome\n    port: 3232\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [8080, 3232]
+
+
+def test_detect_ota_ports_dedupes_repeated_ports(tmp_path):
+    """Two platforms on the same port shouldn't mean two identical probes —
+    each costs a full connect timeout when the device is unreachable."""
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "ota:\n"
+        "  - platform: esphome\n    port: 3232\n"
+        "  - platform: web_server\n    port: 3232\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [3232]
+
+
+def test_detect_ota_ports_tolerates_unresolved_secret_tags(tmp_path):
+    """`!secret` (and other ESPHome custom tags) must not blow up the
+    scan — it's a plain line-based indentation scan, not a YAML parse,
+    so tags are never even looked at."""
+    import client as client_module
+
+    target = tmp_path / "dev.yaml"
+    target.write_text(
+        "esphome:\n  name: dev\n"
+        "wifi:\n  ssid: !secret wifi_ssid\n  password: !secret wifi_password\n"
+        "ota:\n  - platform: esphome\n    port: 5555\n"
+    )
+    assert client_module._detect_ota_ports(str(target)) == [5555]
+
+
+def test_detect_ota_ports_does_not_require_yaml_module(tmp_path, monkeypatch):
+    """Regression guard for the #248 hotfix: some worker Docker images
+    don't have PyYAML installed at all. A bare `import yaml` inside
+    `_detect_ota_ports` crashed the whole `run_job` call with
+    ModuleNotFoundError, abandoning the job mid-flight (live prod hit,
+    2026-08-06). Fixed by not depending on PyYAML at all — this test
+    proves it by making `import yaml` raise and confirming detection
+    still works correctly."""
+    import builtins
+
+    import client as client_module
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    target = tmp_path / "dev.yaml"
+    target.write_text("esphome:\n  name: dev\nota:\n  - platform: esphome\n    port: 6666\n")
+    assert client_module._detect_ota_ports(str(target)) == [6666]
+
+
+def test_run_job_falls_back_to_server_ota_when_worker_cant_reach_device(tmp_path, monkeypatch):
+    """SOTA.5: when the pre-flight reachability check fails, run_job must
+    take the compile-only path (not `esphome run`), archive firmware as
+    required, and submit the result with requires_server_ota=True."""
+    import client as client_module
+
+    _add_fake_version(tmp_path, "2024.3.1")
+    monkeypatch.setattr(client_module, "_ESPHOME_VERSIONS_DIR", str(tmp_path))
+
+    commands: list[list[str]] = []
+
+    def fake_run_subprocess(cmd, cwd, timeout, label, env=None, job_id=None):
+        commands.append(list(cmd))
+        return ("Successfully compiled program.", True)
+
+    monkeypatch.setattr(client_module, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(client_module, "_flush_log_text", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_log_invocation", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
+    # Reachability check reports the device as unreachable from this worker.
+    monkeypatch.setattr(client_module, "_check_ota_reachable", lambda *a, **k: (False, "unreachable\n"))
+
+    archive_calls: list[dict] = []
+
+    def fake_archive(job_id, build_dir, target_stem, *, client_id=None, required):
+        archive_calls.append({"job_id": job_id, "required": required})
+        return True
+
+    monkeypatch.setattr(client_module, "_archive_firmware_to_server", fake_archive)
+
+    submitted: list[dict] = []
+
+    def fake_submit(job_id, status, log=None, ota_result=None, requires_server_ota=False):
+        submitted.append({
+            "status": status, "ota_result": ota_result,
+            "requires_server_ota": requires_server_ota,
+        })
+
+    monkeypatch.setattr(client_module, "_submit_result", fake_submit)
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=3)
+    job = {
+        "job_id": "j1",
+        "target": "dev.yaml",
+        "esphome_version": "2024.3.1",
+        "bundle_b64": _make_bundle_b64(),
+        "timeout_seconds": 60,
+        "ota_only": False,
+        "validate_only": False,
+        "download_only": False,
+        "server_ota": False,
+        "ota_address": "10.0.0.5",
+    }
+
+    client_module.run_job("client-1", job, vm, worker_id=1)
+
+    # Only a compile, never `esphome run`.
+    assert len(commands) == 1, f"expected exactly one subprocess call, got {commands}"
+    assert "compile" in commands[0]
+    assert "run" not in commands[0]
+
+    assert archive_calls == [{"job_id": "j1", "required": True}]
+
+    assert submitted[-1]["status"] == "success"
+    assert submitted[-1]["ota_result"] is None
+    assert submitted[-1]["requires_server_ota"] is True
+
+
+def test_run_job_skips_reachability_check_when_no_known_address(tmp_path, monkeypatch):
+    """When the server has no resolved address (ota_address falls back to
+    the literal "OTA"), there's nothing meaningful to probe — the check
+    must be skipped and the normal `esphome run --device OTA` path used."""
+    import client as client_module
+
+    _add_fake_version(tmp_path, "2024.3.1")
+    monkeypatch.setattr(client_module, "_ESPHOME_VERSIONS_DIR", str(tmp_path))
+
+    commands: list[list[str]] = []
+
+    def fake_run_subprocess(cmd, cwd, timeout, label, env=None, job_id=None):
+        commands.append(list(cmd))
+        return ("Successful OTA", True)
+
+    check_calls: list = []
+    monkeypatch.setattr(client_module, "_check_ota_reachable", lambda *a, **k: check_calls.append(a) or (True, ""))
+    monkeypatch.setattr(client_module, "_run_subprocess", fake_run_subprocess)
+    monkeypatch.setattr(client_module, "_flush_log_text", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_log_invocation", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_report_status", lambda *a, **k: None)
+    monkeypatch.setattr(client_module, "_submit_result", lambda *a, **k: None)
+
+    vm = VersionManager(versions_base=tmp_path, max_versions=3)
+    job = {
+        "job_id": "j1",
+        "target": "dev.yaml",
+        "esphome_version": "2024.3.1",
+        "bundle_b64": _make_bundle_b64(),
+        "timeout_seconds": 60,
+        "ota_only": False,
+        "validate_only": False,
+        # ota_address deliberately omitted — job.get("ota_address") is None → "OTA"
+    }
+
+    client_module.run_job("client-1", job, vm, worker_id=1)
+
+    assert check_calls == []
+    assert len(commands) == 1
+    assert "run" in commands[0] and "--device" in commands[0] and "OTA" in commands[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1109,6 +1579,27 @@ def test_collect_firmware_variants_espidf_native_layout(tmp_path):
     assert variants["ota"].read_bytes() == b"ota"
 
 
+def test_collect_firmware_variants_espidf_native_ota_bin_layout(tmp_path):
+    """Regression: ESPHome 2026.7's esp32c6 native ESP-IDF build emits
+    firmware.ota.bin instead of firmware.bin for the OTA-safe shape.
+    Before this fix, only firmware.bin was checked, so the ota variant
+    was silently dropped — only factory got archived, and server-side
+    OTA (_server_ota_push) failed before it could even ping the device
+    since it requires an ota/firmware variant to exist in storage."""
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    device_dir = tmp_path / ".esphome" / "build" / "testdevice" / "build"
+    device_dir.mkdir(parents=True)
+    (device_dir / "firmware.factory.bin").write_bytes(b"factory")
+    (device_dir / "firmware.ota.bin").write_bytes(b"ota")
+
+    variants = client_mod._collect_firmware_variants(str(tmp_path), "testdevice")
+
+    assert variants.keys() == {"factory", "ota"}
+    assert variants["factory"].read_bytes() == b"factory"
+    assert variants["ota"].read_bytes() == b"ota"
+
+
 def test_collect_firmware_variants_missing_returns_empty(tmp_path, caplog):
     """Neither layout present: returns {} and logs a warning, doesn't raise."""
     import client as client_mod  # noqa: PLC0415 — see section note above
@@ -1126,3 +1617,23 @@ def test_collect_firmware_variants_missing_returns_empty(tmp_path, caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("No firmware binary found" in m for m in warnings), warnings
     assert any(".pioenvs" in m and "build/" in m for m in warnings), warnings
+
+
+# ---------------------------------------------------------------------------
+# Worker lifecycle: a clean shutdown keeps the persisted client_id so the
+# next start re-attaches to the same registry row instead of minting a
+# fresh UUID (which would leave a duplicate row behind on the server).
+# ---------------------------------------------------------------------------
+
+def test_deregister_keeps_persisted_client_id(tmp_path, monkeypatch):
+    import client as client_mod  # noqa: PLC0415 — see section note above
+
+    id_file = tmp_path / ".client_id"
+    id_file.write_text("keep-me")
+    monkeypatch.setattr(client_mod, "_CLIENT_ID_FILE", str(id_file))
+    ok_resp = MagicMock(ok=True, status_code=200)
+    monkeypatch.setattr(client_mod, "post", lambda *a, **k: ok_resp)
+
+    client_mod.deregister("keep-me")
+
+    assert id_file.read_text() == "keep-me"

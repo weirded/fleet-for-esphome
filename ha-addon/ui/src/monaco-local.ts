@@ -26,17 +26,24 @@
 // basic language (TypeScript, JSON, Go, Solidity, Rust, Dockerfile…) —
 // ~3.6 MB raw on disk — for zero benefit here since ESPHome configs are
 // always YAML. ``editor.api`` is the one-file core entry; the YAML
-// contribution side-effect import registers YAML with Monaco's language
-// registry so ``defaultLanguage="yaml"`` works on the Editor component.
-// Using the explicit ``.js`` extension bypasses monaco-editor's
-// package.json exports map (which only exports ``.`` via its ``module``
-// field, which in turn re-exports every bundled language). With the
-// full path + .js extension, TS under ``moduleResolution: bundler``
-// still finds the sibling ``.d.ts`` for types while Vite bundles just
-// what's imported.
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
-import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js';
-import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+// register side-effect import adds YAML to Monaco's language registry
+// so ``defaultLanguage="yaml"`` works on the Editor component.
+//
+// DEP.2 — paths changed shape in monaco 0.56. Its exports map is now
+// ``"./*": "./esm/vs/*.js"``, i.e. the ``esm/vs/`` prefix is supplied by
+// the map rather than written in the specifier; keeping the old
+// ``monaco-editor/esm/vs/…`` form resolves to ``esm/vs/esm/vs/…`` and
+// fails (TS2307). 0.56 also reorganised the language definitions:
+// ``basic-languages/yaml/yaml.contribution.js`` is now
+// ``languages/definitions/yaml/register.js``. The explicit ``.js``
+// extension still matters — it keeps TS under ``moduleResolution:
+// bundler`` finding the sibling ``.d.ts`` while Vite bundles only what
+// is imported, instead of falling through to the barrel entry that
+// re-exports every bundled language.
+import * as monaco from 'monaco-editor/editor/editor.api.js';
+import 'monaco-editor/features/register.all.js';
+import 'monaco-editor/languages/definitions/yaml/register.js';
+import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import { loader } from '@monaco-editor/react';
 
 // MonacoEnvironment must be set on `self` BEFORE Monaco is used.
