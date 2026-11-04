@@ -105,3 +105,104 @@ def test_version_file_overrides_manifest_version(tmp_path: Path) -> None:
     assert result == "installed"
     installed = json.loads((dest / "manifest.json").read_text())
     assert installed["version"] == "1.4.1-dev.46"
+
+
+# ---------------------------------------------------------------------------
+# #257: restart notice after an integration update
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402 — appended section keeps its own imports together
+from aiohttp import web  # noqa: E402 — same
+from aiohttp.test_utils import TestServer  # noqa: E402 — same
+
+from integration_installer import (  # noqa: E402 — same
+    RESTART_NOTIFICATION_ID,
+    notify_restart_required,
+)
+
+
+@pytest.fixture(autouse=True)
+def _enable_socket():
+    """Loopback for TestServer; pytest-socket blocks it on some dev boxes (see test_api.py)."""
+    try:
+        import pytest_socket as _pytest_socket  # type: ignore[import-not-found]  # optional dev-only plugin
+    except ImportError:
+        yield
+        return
+    _pytest_socket.enable_socket()
+    yield
+
+
+async def _fake_ha(components: list[str], *, service_status: int = 200):
+    """Tiny stand-in for the Supervisor core-API proxy; records POSTs."""
+    posted: list[dict] = []
+    seen_auth: list[str] = []
+
+    async def config(request: web.Request) -> web.Response:
+        seen_auth.append(request.headers.get("Authorization", ""))
+        return web.json_response({"components": components})
+
+    async def create(request: web.Request) -> web.Response:
+        posted.append(await request.json())
+        return web.json_response([], status=service_status)
+
+    app = web.Application()
+    app.router.add_get("/core/api/config", config)
+    app.router.add_post("/core/api/services/persistent_notification/create", create)
+    server = TestServer(app)
+    await server.start_server()
+    return server, posted, seen_auth
+
+
+async def test_restart_notice_posted_when_integration_loaded() -> None:
+    server, posted, seen_auth = await _fake_ha(["sensor", "esphome_fleet"])
+    try:
+        ok = await notify_restart_required(
+            "1.8.1", token="tok", base_url=str(server.make_url("/core/api")),
+        )
+    finally:
+        await server.close()
+    assert ok is True
+    assert seen_auth == ["Bearer tok"]
+    assert len(posted) == 1
+    assert posted[0]["notification_id"] == RESTART_NOTIFICATION_ID
+    assert "1.8.1" in posted[0]["message"]
+    assert "Restart" in posted[0]["title"]
+
+
+async def test_no_restart_notice_when_integration_not_loaded() -> None:
+    """Not set up in HA (or HA still booting) → nothing to restart for."""
+    server, posted, _ = await _fake_ha(["sensor", "esphome"])
+    try:
+        ok = await notify_restart_required(
+            "1.8.1", token="tok", base_url=str(server.make_url("/core/api")),
+        )
+    finally:
+        await server.close()
+    assert ok is False
+    assert posted == []
+
+
+async def test_no_restart_notice_without_supervisor_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Standalone Docker has no Supervisor → skip without any network call."""
+    monkeypatch.delenv("SUPERVISOR_TOKEN", raising=False)
+    assert await notify_restart_required("1.8.1", base_url="http://127.0.0.1:9") is False
+
+
+async def test_restart_notice_never_raises_when_ha_unreachable() -> None:
+    ok = await notify_restart_required(
+        "1.8.1", token="tok", base_url="http://127.0.0.1:9/core/api", timeout_s=1.0,
+    )
+    assert ok is False
+
+
+async def test_restart_notice_reports_failure_on_service_error() -> None:
+    server, posted, _ = await _fake_ha(["esphome_fleet"], service_status=500)
+    try:
+        ok = await notify_restart_required(
+            "1.8.1", token="tok", base_url=str(server.make_url("/core/api")),
+        )
+    finally:
+        await server.close()
+    assert ok is False
+    assert len(posted) == 1

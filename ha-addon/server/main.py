@@ -1631,8 +1631,15 @@ def create_app() -> web.Application:
         # /config/custom_components/esphome_fleet on every boot.
         # Failures are logged and swallowed so the add-on keeps running.
         try:
-            from integration_installer import install_integration  # noqa: PLC0415
-            install_integration()
+            from integration_installer import (  # noqa: PLC0415
+                install_integration, notify_restart_required,
+            )
+            if install_integration() == "updated":
+                # #257: HA keeps the old integration loaded until it restarts.
+                # Fire-and-forget so a slow Supervisor proxy can't delay boot.
+                app["integration_restart_notice_task"] = asyncio.create_task(
+                    notify_restart_required()
+                )
         except Exception:
             logger.exception("HA integration auto-install raised unexpectedly")
 

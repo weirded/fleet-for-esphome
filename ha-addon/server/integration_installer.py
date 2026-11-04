@@ -13,8 +13,11 @@ nice-to-have, the add-on must keep running either way.
 
 The actual reload-in-HA step is deliberately NOT automated. Supervisor's
 public API doesn't have a reload-integrations endpoint, and calling a
-private one would be fragile. Users get a one-line INFO log pointing
-them at Settings → Devices & Services when an install/update happens.
+private one would be fragile. HA Core loads custom integrations once at
+startup, so after an *update* the running HA keeps the old code (and the
+old entity set) until it restarts. ``notify_restart_required`` raises a
+persistent notification in HA saying so (#257 — users upgraded to 1.8.0
+and never saw its new entities because nothing told them to restart).
 """
 
 from __future__ import annotations
@@ -27,6 +30,13 @@ import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Fixed id so repeated add-on restarts replace one notification instead of
+# stacking them. HA drops persistent notifications on restart, which is
+# exactly when this one stops being true.
+RESTART_NOTIFICATION_ID = "esphome_fleet_restart_required"
+INTEGRATION_DOMAIN = "esphome_fleet"
+SUPERVISOR_CORE_API = "http://supervisor/core/api"
 
 
 # Source lives inside the container — bundled by the Dockerfile's
@@ -214,3 +224,62 @@ def install_integration(
         destination_dir,
     )
     return "updated"
+
+
+async def notify_restart_required(
+    new_version: str | None = None,
+    *,
+    token: str | None = None,
+    base_url: str = SUPERVISOR_CORE_API,
+    timeout_s: float = 10.0,
+) -> bool:
+    """Tell the user (in HA) to restart so the updated integration loads.
+
+    Only notifies when HA has the integration *loaded* (``esphome_fleet``
+    in ``/api/config`` ``components``): if it isn't set up, or HA is still
+    booting and will load the new files anyway, there's nothing to
+    restart for. Best-effort — returns ``True`` if a notification was
+    posted, ``False`` otherwise; never raises.
+    """
+    token = token if token is not None else os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return False
+    new_version = new_version or _read_addon_version(DEFAULT_VERSION_FILE) or "a new version"
+    try:
+        import aiohttp  # noqa: PLC0415 — keep the module importable without aiohttp for the sync installer tests
+
+        headers = {"Authorization": f"Bearer {token}"}
+        timeout = aiohttp.ClientTimeout(total=timeout_s)
+        async with aiohttp.ClientSession(headers=headers, timeout=timeout) as session:
+            async with session.get(f"{base_url}/config") as resp:
+                if resp.status != 200:
+                    logger.debug("HA /api/config returned HTTP %d — no restart notice", resp.status)
+                    return False
+                config = await resp.json()
+            if INTEGRATION_DOMAIN not in (config.get("components") or []):
+                logger.debug("esphome_fleet not loaded in HA — no restart notice needed")
+                return False
+            payload = {
+                "notification_id": RESTART_NOTIFICATION_ID,
+                "title": "Restart Home Assistant to finish updating Fleet for ESPHome",
+                "message": (
+                    f"Fleet for ESPHome was updated to {new_version}. Home Assistant "
+                    "is still running the previous version of its integration, so new "
+                    "entities and fixes won't appear until you restart Home Assistant "
+                    "(Settings → System → Restart)."
+                ),
+            }
+            async with session.post(
+                f"{base_url}/services/persistent_notification/create", json=payload,
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(
+                        "Couldn't post the HA restart notice (HTTP %d) — restart Home "
+                        "Assistant to load the updated integration", resp.status,
+                    )
+                    return False
+        logger.info("Asked Home Assistant to show a restart notice for integration v%s", new_version)
+        return True
+    except Exception:
+        logger.debug("HA restart notice failed", exc_info=True)
+        return False
