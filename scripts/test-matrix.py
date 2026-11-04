@@ -742,6 +742,10 @@ async def run_target_chain(target: Target, sem: asyncio.Semaphore | None) -> Tar
         "PLAYWRIGHT_HTML_REPORT": str(result.report_dir),
         # JSON reporter output path for post-run collation.
         "PLAYWRIGHT_JSON_OUTPUT_NAME": str(target_dir / "results.json"),
+        # Per-target artifact dir too: the shared default ``test-results/``
+        # let parallel runs delete each other's traces mid-write, failing
+        # passing tests with ENOENT at context teardown.
+        "PLAYWRIGHT_OUTPUT_DIR": str(target_dir / "test-results"),
     }
     npm_env.update(target.playwright_env)
 
