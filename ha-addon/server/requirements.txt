@@ -2,13 +2,14 @@ aiohttp>=3.14.4
 pydantic>=2.14.2
 croniter>=6.2.4
 apscheduler>=3.11.3,<4
-# Upper bound is deliberate. 46.0.0 landed ConnectionClosedEvent for API
-# consumers (esphome/aioesphomeapi#1853); our test suite stubs the whole
-# library out (tests/test_device_poller.py does
+# Upper bound is deliberate: each aioesphomeapi major gets evaluated by
+# hand, because our test suite stubs the whole library out
+# (tests/test_device_poller.py does
 # sys.modules.setdefault("aioesphomeapi", MagicMock())), so CI cannot
-# detect a 46.x behaviour change on the live device-polling path. Floor
-# bumped to the version dependabot asked for; the 46.x move gets its own
-# evaluation. See DEP.3 in dev-plans/WORKITEMS-future.md.
+# detect a behaviour change on the live device-polling path. 46.x was
+# evaluated in 1.8.1 (DEP.3): only additive changes on the calls we make,
+# and we register no connection-closed callbacks (46.0's
+# ConnectionClosedEvent, esphome/aioesphomeapi#1853).
 aioesphomeapi>=46.25.0,<47
 zeroconf>=0.151.5
 pyyaml>=6.0.3
