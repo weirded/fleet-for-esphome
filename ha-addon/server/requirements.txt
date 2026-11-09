@@ -47,6 +47,6 @@ cryptography>=50.0.2
 # --upgrade); floors bumped to clear pip-audit findings (2026-11-04):
 # multidict PYSEC-2026-4244 (aiohttp), certifi PYSEC-2026-4320 and
 # urllib3 PYSEC-2026-4175/4176/4177 (requests).
-multidict>=6.9.1
+multidict>=7.2.1
 certifi>=2026.10.18
 urllib3>=2.8.0
