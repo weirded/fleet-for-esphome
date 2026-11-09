@@ -13,7 +13,7 @@
     "test:e2e:hass-4": "playwright test --config=e2e-hass-4/playwright.config.ts"
   },
   "dependencies": {
-    "@base-ui/react": "^1.4.1",
+    "@base-ui/react": "^1.9.0",
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.3.0",
     "@tanstack/react-table": "^8.21.3",
