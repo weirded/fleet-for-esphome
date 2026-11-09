@@ -15,7 +15,7 @@
   "dependencies": {
     "@base-ui/react": "^1.4.1",
     "@monaco-editor/react": "^4.7.0",
-    "@tailwindcss/vite": "^4.3.0",
+    "@tailwindcss/vite": "^4.3.5",
     "@tanstack/react-table": "^8.21.3",
     "@types/js-yaml": "^4.0.9",
     "@xterm/xterm": "^6.0.0",
