@@ -10,7 +10,7 @@ apscheduler>=3.11.3,<4
 # evaluated in 1.8.1 (DEP.3): only additive changes on the calls we make,
 # and we register no connection-closed callbacks (46.0's
 # ConnectionClosedEvent, esphome/aioesphomeapi#1853).
-aioesphomeapi>=46.25.0,<47
+aioesphomeapi>=46.28.0,<47
 zeroconf>=0.151.5
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
