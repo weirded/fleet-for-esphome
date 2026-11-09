@@ -11,5 +11,5 @@ idna>=3.20
 # Transitives of requests, pinned old in the lock (refresh-deps.sh runs
 # without --upgrade); floors bumped to clear pip-audit findings
 # (2026-11-04): certifi PYSEC-2026-4320, urllib3 PYSEC-2026-4175/4176/4177.
-certifi>=2026.10.18
+certifi>=2026.10.23
 urllib3>=2.8.0
