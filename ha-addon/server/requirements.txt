@@ -11,7 +11,7 @@ apscheduler>=3.11.3,<4
 # and we register no connection-closed callbacks (46.0's
 # ConnectionClosedEvent, esphome/aioesphomeapi#1853).
 aioesphomeapi>=46.25.0,<47
-zeroconf>=0.151.5
+zeroconf>=0.153.0
 pyyaml>=6.0.3
 # SE.1: esphome was dropped from the server image in 1.4.1. At first
 # boot, scanner.ensure_esphome_installed lazy-installs the HA ESPHome
