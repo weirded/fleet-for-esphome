@@ -10,7 +10,7 @@
 # Last refreshed: 2026-07-17 (#240 python 3.11->3.13 base bump, in lockstep
 # with ha-addon/Dockerfile — both must match so a stale client doesn't
 # drift onto a CVE window the server has already cleared).
-FROM python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 # Bug #6 (1.6.1): `iputils-ping` is required by the OTA network-diagnostics
 # probe in client.py — without it the probe logs `Ping: [Errno 2] No such
 # file or directory: 'ping'` every time an OTA upload fails, which is
