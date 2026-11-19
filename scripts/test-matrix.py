@@ -12,7 +12,7 @@ iteration (no GHCR round-trip).
 Targets (see dev-plans/HOME-LAB.md):
   hass-4               always-on HAOS box at 192.168.225.112
   haos-pve             throwaway HAOS VM on the `pve` Proxmox host
-  standalone-pve       plain Docker host `docker-pve` running docker-compose
+  standalone-pve       plain Docker host `docker-pve-1` running docker-compose
 
 Image flow: GitHub Actions (publish-addon.yml / publish-server.yml /
 publish-client.yml) already builds and pushes the three GHCR images on
@@ -292,7 +292,7 @@ def make_targets(version: str) -> dict[str, Target]:
         ),
         "standalone-pve": Target(
             name="standalone-pve",
-            # IP, not the `docker-pve` SSH alias — the browser and
+            # IP, not the `docker-pve-1` SSH alias — the browser and
             # Playwright's Node client don't read ~/.ssh/config. The
             # SSH-side (STANDALONE_HOST below) still uses the alias.
             base_url="http://192.168.227.90:8765",
@@ -300,7 +300,7 @@ def make_targets(version: str) -> dict[str, Target]:
             # open URL. Also: standalone defaults to require_ha_auth=false,
             # so clicking it loads the UI without a Bearer prompt.
             deploy_cmd=["bash", "scripts/standalone/deploy.sh"],
-            deploy_env={"TAG": tag, "STANDALONE_HOST": "docker-pve"},
+            deploy_env={"TAG": tag, "STANDALONE_HOST": "docker-pve-1"},
             token_cache=home / ".config" / "distributed-esphome" / "standalone-token",
             playwright_env={
                 "FLEET_TARGET": "cyd-world-clock.yaml",

@@ -22,7 +22,7 @@
 #   FLEET_SOURCE_HOST=other-hass scripts/standalone/seed-fleet.sh
 #
 # Env overrides:
-#   STANDALONE_HOST         (default docker-pve)
+#   STANDALONE_HOST         (default docker-pve-1)
 #   STANDALONE_COMPOSE_DIR  (default /opt/esphome-fleet)
 #   FLEET_SOURCE_HOST       (default hass-4)
 #   FLEET_SOURCE_DIR        (default /usr/share/hassio/homeassistant/esphome)
@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
+STANDALONE_HOST="${STANDALONE_HOST:-docker-pve-1}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
 FLEET_SOURCE_HOST="${FLEET_SOURCE_HOST:-hass-4}"
 FLEET_SOURCE_DIR="${FLEET_SOURCE_DIR:-/usr/share/hassio/homeassistant/esphome}"

@@ -78,8 +78,8 @@ REMOTE
 
 refresh "macdaddy"          "macdaddy.localdomain"       "macOS 26 (M1 Mac Mini)"
 refresh "ai-mac"            "AI-MacBook-Pro.localdomain" "macOS 26 (M3 Pro MacBook Pro)"
-refresh "docker-pve"        "docker-pve"                 "Proxmox on Debian"
-refresh "docker-optiplex-5" "docker-optiplex-5"          "Proxmox on Debian"
+refresh "docker-pve-1"      "docker-pve"                 "Proxmox on Debian"
+refresh "docker-pve-3"      "docker-optiplex-5"          "Proxmox on Debian"
 
 echo
 echo "========== summary =========="

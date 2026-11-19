@@ -18,12 +18,12 @@
 #     by design — matches scripts/haos/ onboarding conventions)
 #
 # Env overrides:
-#   STANDALONE_HOST         (default docker-pve)
+#   STANDALONE_HOST         (default docker-pve-1)
 #   STANDALONE_COMPOSE_DIR  (default /opt/esphome-fleet)
 
 set -euo pipefail
 
-STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
+STANDALONE_HOST="${STANDALONE_HOST:-docker-pve-1}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
 
 SSH_CTRL="$(mktemp -u -t standalone-ssh.XXXXXX)"

@@ -21,11 +21,11 @@
 #
 # Usage:
 #   ./scripts/push-to-standalone.sh
-#   STANDALONE_HOST=docker-optiplex-5 ./scripts/push-to-standalone.sh
+#   STANDALONE_HOST=docker-pve-3 ./scripts/push-to-standalone.sh
 #   SKIP_TEARDOWN=1 SKIP_SMOKE=1 ./scripts/push-to-standalone.sh   # dry
 #
 # Env:
-#   STANDALONE_HOST        ssh alias          (default docker-pve)
+#   STANDALONE_HOST        ssh alias          (default docker-pve-1)
 #   STANDALONE_URL         http base          (default http://<host>:8765)
 #   STANDALONE_COMPOSE_DIR remote path        (default /opt/esphome-fleet)
 #   STANDALONE_TOKEN_FILE  local token cache  (default ~/.config/distributed-esphome/standalone-token)
@@ -43,7 +43,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
+STANDALONE_HOST="${STANDALONE_HOST:-docker-pve-1}"
 TAG="${TAG:-develop}"
 FLEET_SOURCE_HOST="${FLEET_SOURCE_HOST:-hass-4}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
@@ -63,7 +63,7 @@ if [[ "$STANDALONE_URL" =~ ^http://([^:/]+)(:[0-9]+)?(/.*)?$ ]]; then
   if [[ ! "$_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     # `ssh -G` walks ~/.ssh/config and emits the effective HostName;
     # that's authoritative when the target is an ssh alias (our common
-    # case: docker-pve, docker-optiplex-5). Fall back to the OS
+    # case: docker-pve-1, docker-pve-3). Fall back to the OS
     # resolvers if ssh_config doesn't rewrite to an IP.
     _ip=$(ssh -G "$_host" 2>/dev/null | awk '/^hostname / {print $2; exit}')
     [[ "$_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || _ip=""

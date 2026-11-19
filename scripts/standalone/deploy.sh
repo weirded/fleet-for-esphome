@@ -14,11 +14,11 @@
 #
 # Usage:
 #   scripts/standalone/deploy.sh
-#   STANDALONE_HOST=docker-optiplex-5 scripts/standalone/deploy.sh
+#   STANDALONE_HOST=docker-pve-3 scripts/standalone/deploy.sh
 #   TAG=1.6.2-dev.19 scripts/standalone/deploy.sh
 #
 # Env overrides:
-#   STANDALONE_HOST         ssh alias (default docker-pve)
+#   STANDALONE_HOST         ssh alias (default docker-pve-1)
 #   TAG                     image tag (default develop)
 #   STANDALONE_COMPOSE_DIR  remote compose dir (default /opt/esphome-fleet)
 #   STANDALONE_TOKEN_FILE   local token cache (default
@@ -29,7 +29,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
+STANDALONE_HOST="${STANDALONE_HOST:-docker-pve-1}"
 TAG="${TAG:-develop}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
 # Notable constraint: the server does NOT honor a SERVER_TOKEN env

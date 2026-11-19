@@ -20,13 +20,13 @@
 #   - deploy.sh has run (server responding on :8765)
 #
 # Env overrides:
-#   STANDALONE_HOST       (default docker-pve)
+#   STANDALONE_HOST       (default docker-pve-1)
 #   ESPHOME_VERSION       (default 2026.10.2 — pinned to compile-test.yml)
 #   BOOTSTRAP_TIMEOUT     (default 600 seconds = 10 min)
 
 set -euo pipefail
 
-STANDALONE_HOST="${STANDALONE_HOST:-docker-pve}"
+STANDALONE_HOST="${STANDALONE_HOST:-docker-pve-1}"
 STANDALONE_COMPOSE_DIR="${STANDALONE_COMPOSE_DIR:-/opt/esphome-fleet}"
 ESPHOME_VERSION="${ESPHOME_VERSION:-2026.10.2}"
 BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-600}"
@@ -41,7 +41,7 @@ trap 'ssh "${SSH_OPTS[@]}" -O exit "$STANDALONE_HOST" 2>/dev/null || true; rm -f
 rsh() { ssh "${SSH_OPTS[@]}" "$STANDALONE_HOST" "$@"; }
 
 # All curls run on the remote so we don't have to care about whether
-# the server is reachable from the laptop (see the docker-pve dual-homing
+# the server is reachable from the laptop (see the docker-pve-1 dual-homing
 # note in the plan). Standalone default is require_ha_auth=false so
 # the token is optional; we send it only if we have one.
 AUTH_HEADER=""
